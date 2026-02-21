@@ -1,0 +1,25 @@
+# Default: normalize line endings on checkin
+* text=auto
+
+# Source files: LF everywhere
+*.py    text eol=lf
+*.sh    text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
+*.html  text eol=lf
+*.css   text eol=lf
+*.js    text eol=lf
+*.txt   text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.toml  text eol=lf
+*.ipynb text eol=lf
+
+# Binary files: no line ending translation, no diff
+*.mpy   binary
+*.bin   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
