@@ -1,7 +1,11 @@
+# --- Spotipy OAuth token cache ---
+.spotipyoauthcache
+
 # --- Secrets (never, ever) ---
 .env
 .env.*
 *.env
+!.env.example
 __ssid
 __password
 __spotify_refresh_token
