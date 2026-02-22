@@ -24,6 +24,16 @@ import os
 from collections import defaultdict
 from pathlib import Path
 
+
+def project_root() -> Path:
+    """Walk up from this file's location until we find the .git directory."""
+    p = Path(__file__).resolve().parent
+    while p != p.parent:
+        if (p / ".git").exists():
+            return p
+        p = p.parent
+    return Path(__file__).resolve().parent  # fallback
+
 from dotenv import load_dotenv
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
@@ -36,7 +46,7 @@ SCOPES = " ".join([
     "user-library-read",
 ])
 
-REDIRECT_URI = "http://localhost:8888/callback"
+REDIRECT_URI = "http://127.0.0.1:8888/callback"
 
 ZONE_OPTIONS = [
     "ambient",
@@ -44,8 +54,9 @@ ZONE_OPTIONS = [
     "industrial",
     "fun/dance",
     "indie-melancholy",
-    "singer-songwriter",
+    "americana",
     "darkwave",
+    "shoegaze",
 ]
 
 
@@ -139,22 +150,38 @@ def mine_liked_songs(sp: spotipy.Spotify, albums: dict, include_singles: bool):
     print(f"     → {count} tracks")
 
 
-def mine_playlists(sp: spotipy.Spotify, albums: dict, include_singles: bool):
+def mine_playlists(sp: spotipy.Spotify, albums: dict, include_singles: bool, playlist_filter: str | None = None):
     playlists = list(iter_pages(sp, sp.current_user_playlists(limit=50)))
     print(f"\n  {len(playlists)} playlists found")
+
+    if playlist_filter:
+        needle = playlist_filter.lower()
+        playlists = [p for p in playlists if needle in (p.get("name") or "").lower()]
+        print(f"  Filtered to {len(playlists)} matching {playlist_filter!r}")
 
     for pl in playlists:
         if not pl:
             continue
         name  = pl.get("name") or "Untitled"
         pl_id = pl["id"]
-        total = pl.get("tracks", {}).get("total", 0)
+
+        try:
+            first_page = sp.playlist_items(pl_id, limit=100, additional_types=("track",))
+        except spotipy.SpotifyException as e:
+            reason = e.reason.strip() if e.reason else ""
+            print(f"  ✗  {name!r} (HTTP {e.http_status}{': ' + reason if reason else ''})")
+            continue
+        except Exception as e:
+            print(f"  ✗  {name!r} (skipped: {e})")
+            continue
+
+        total = first_page.get("total", 0)
         if total == 0:
             continue
 
         print(f"  ▸  {name} ({total} tracks)")
         count = 0
-        for item in iter_pages(sp, sp.playlist_tracks(pl_id, limit=100)):
+        for item in iter_pages(sp, first_page):
             info = extract_album_info(item, include_singles)
             if not info:
                 continue
@@ -189,7 +216,7 @@ def build_candidates(albums: dict, min_tracks: int) -> list:
             "playlists":    sorted(data["playlist_names"]),
             # --- annotation fields (fill these in before running collect.py) ---
             "zone":  None,   # ambient | zone-out | industrial | fun/dance |
-                             # indie-melancholy | singer-songwriter | darkwave
+                             # indie-melancholy | americana | darkwave | shoegaze
             "split": None,   # training | test | skip
         })
     candidates.sort(key=lambda x: (-x["track_count"], -x["playlist_count"], x["artist"].lower()))
@@ -227,6 +254,14 @@ def main():
         "--include-singles", action="store_true",
         help="Include single-track releases (excluded by default)"
     )
+    parser.add_argument(
+        "--playlist", type=str, default=None, metavar="NAME",
+        help="Only mine playlists whose name contains NAME (case-insensitive)"
+    )
+    parser.add_argument(
+        "--skip-liked-songs", action="store_true",
+        help="Skip mining Liked Songs (saves ~6 API calls when debugging playlists)"
+    )
     args = parser.parse_args()
 
     print("musical.mood.ring — Playlist Miner")
@@ -236,7 +271,12 @@ def main():
 
     sp = get_client()
     me = sp.me()
-    print(f"  ✓ Logged in as: {me.get('display_name') or me['id']}\n")
+    print(f"  ✓ Logged in as: {me.get('display_name') or me['id']}")
+
+    token = sp.auth_manager.get_cached_token()
+    if token:
+        print(f"  Token scopes: {token.get('scope', '(none)')}")
+    print()
 
     albums: dict = defaultdict(lambda: {
         "album_id":     "",
@@ -248,8 +288,9 @@ def main():
     })
 
     print("Mining your library...")
-    mine_liked_songs(sp, albums, args.include_singles)
-    mine_playlists(sp, albums, args.include_singles)
+    if not args.skip_liked_songs:
+        mine_liked_songs(sp, albums, args.include_singles)
+    mine_playlists(sp, albums, args.include_singles, playlist_filter=args.playlist)
 
     print("\nBuilding candidate list...")
     candidates = build_candidates(albums, args.min_tracks)
@@ -257,7 +298,7 @@ def main():
 
     print_table(candidates)
 
-    out_path = Path("data/playlist_candidates.json")
+    out_path = project_root() / "data" / "playlist_candidates.json"
     out_path.parent.mkdir(exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(candidates, f, indent=2, ensure_ascii=False)

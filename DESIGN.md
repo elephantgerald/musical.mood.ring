@@ -168,7 +168,7 @@ S = min(1.0, r * k)               # saturation — grows with mood intensity
 V = V_floor + V_range * energy    # brightness — tracks energy, never reaches zero
 ```
 
-`H(θ)` is a smooth periodic function fitted to seven anchor points derived from real Spotify audio feature data. See §7 for the anchors and §9 (Milestone 0) for how they are calibrated.
+`H(θ)` is a smooth periodic function fitted to eight anchor points derived from real Spotify audio feature data. See §7 for the anchors and §9 (Milestone 0) for how they are calibrated.
 
 ### Temporal Averaging
 Each pixel represents a different time horizon over the (valence, energy) space:
@@ -210,21 +210,24 @@ On first Spotify activity after idle, all three pixels flare to life together an
 - **Maximum brightness is modest** — approximately 40–50% of NeoPixel ceiling. These are mood indicators, not accent lights.
 
 ### Anchor Colors
-These are the seven reference points that constrain the H(θ) function. Positions in (valence, energy) space are estimates, to be refined by Milestone 0 data collection.
+These are the eight reference points that constrain the H(θ) function. Positions in (valence, energy) space are estimates, to be refined by Milestone 0 data collection.
 
-| Zone | Representative Albums | Est. (V, E) | Color | Hex |
+| Zone | Representative Artists | Est. (V, E) | Color | Hex |
 |---|---|---|---|---|
 | Industrial | Front Line Assembly, Ministry | (0.15, 0.85) | Blood crimson | `#6b0000` |
 | Darkwave | TR/ST, Depeche Mode | (0.25, 0.55) | Ice blue | `#0a1a70` |
+| Shoegaze | My Bloody Valentine, Slowdive | (0.30, 0.60) | Blue jeans | TBD |
 | Zone-out / groovy | Orb, DJ Shadow, Amon Tobin, BOC | (0.40, 0.45) | Phosphor amber | `#6a3800` |
-| Indie melancholy | Yo La Tengo | (0.35, 0.50) | Deep violet | `#2d0a50` |
+| Indie melancholy | Yo La Tengo, Cocteau Twins, NewDad | (0.35, 0.50) | Deep violet | `#2d0a50` |
 | Ambient / relaxing | Robert Fripp, Ulrich Schnauss | (0.50, 0.15) | Evening teal | `#003d3d` |
-| Singer-songwriter | Josh Ritter | (0.70, 0.35) | Root beer | `#3d1000` |
+| Americana / folksy | Fleet Foxes, Josh Ritter, Tom Petty | (0.70, 0.35) | Root beer | `#3d1000` |
 | Fun / dance | LCD Soundsystem, Talking Heads | (0.75, 0.80) | Electric green | `#1a5a10` |
+
+The shoegaze (V, E) estimate and hex are placeholders — to be anchored by M0 data from `gazey_gaze` playlist. The color should read as a warm, faded denim blue: somewhere between ice blue and deep violet, with more warmth than either.
 
 The phosphor amber zone-out color intentionally sits near the center of the polar space (low r), so it presents as a warm, desaturated glow — appropriate for the mild, focused listening state it represents.
 
-The color wheel distribution is intentionally spread: red, blue, amber, violet, teal, brown, green — no two adjacent anchors compete visually.
+The color wheel distribution is intentionally spread: red, blue, mid-blue, amber, violet, teal, root beer, green — no two adjacent anchors compete visually.
 
 ---
 
