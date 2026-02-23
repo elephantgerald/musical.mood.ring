@@ -36,3 +36,90 @@ shoegaze         = [0.30, 0.60]
 ambient          = [0.50, 0.15]
 americana        = [0.70, 0.35]
 "fun/dance"      = [0.75, 0.80]
+
+# Last.fm tag → zone classifier
+# Maps common Last.fm tags to the nearest zone. Used by distill.py when a
+# track has no AcousticBrainz features: tags are weighted by their Last.fm
+# count (0–100), the zone with the highest total wins, and its anchor (V, E)
+# is used. Tune alongside zone_anchors during M0 calibration.
+[lastfm_tag_zones]
+# industrial
+"industrial"          = "industrial"
+"ebm"                 = "industrial"
+"industrial metal"    = "industrial"
+"noise"               = "industrial"
+"harsh noise"         = "industrial"
+"power electronics"   = "industrial"
+"aggrotech"           = "industrial"
+
+# darkwave
+"darkwave"            = "darkwave"
+"dark wave"           = "darkwave"
+"goth"                = "darkwave"
+"gothic"              = "darkwave"
+"gothic rock"         = "darkwave"
+"cold wave"           = "darkwave"
+"deathrock"           = "darkwave"
+"post-punk"           = "darkwave"
+"new wave"            = "darkwave"
+
+# shoegaze
+"shoegaze"            = "shoegaze"
+"shoegazing"          = "shoegaze"
+"dream pop"           = "shoegaze"
+"noise pop"           = "shoegaze"
+"ethereal"            = "shoegaze"
+"slowcore"            = "shoegaze"
+
+# zone-out
+"trip hop"            = "zone-out"
+"downtempo"           = "zone-out"
+"psychedelic"         = "zone-out"
+"post-rock"           = "zone-out"
+"krautrock"           = "zone-out"
+"chillout"            = "zone-out"
+"chill"               = "zone-out"
+"lo-fi"               = "zone-out"
+
+# indie-melancholy
+"indie"               = "indie-melancholy"
+"indie pop"           = "indie-melancholy"
+"indie rock"          = "indie-melancholy"
+"alternative"         = "indie-melancholy"
+"emo"                 = "indie-melancholy"
+"sadcore"             = "indie-melancholy"
+"britpop"             = "indie-melancholy"
+"bedroom pop"         = "indie-melancholy"
+"chamber pop"         = "indie-melancholy"
+
+# ambient
+"ambient"             = "ambient"
+"drone"               = "ambient"
+"new age"             = "ambient"
+"minimalist"          = "ambient"
+"atmospheric"         = "ambient"
+"dark ambient"        = "ambient"
+
+# americana
+"americana"           = "americana"
+"folk"                = "americana"
+"country"             = "americana"
+"singer-songwriter"   = "americana"
+"acoustic"            = "americana"
+"alt-country"         = "americana"
+"folk rock"           = "americana"
+"roots"               = "americana"
+"bluegrass"           = "americana"
+
+# fun/dance
+"dance"               = "fun/dance"
+"dance-pop"           = "fun/dance"
+"disco"               = "fun/dance"
+"funk"                = "fun/dance"
+"house"               = "fun/dance"
+"techno"              = "fun/dance"
+"hip-hop"             = "fun/dance"
+"hip hop"             = "fun/dance"
+"r&b"                 = "fun/dance"
+"soul"                = "fun/dance"
+"party"               = "fun/dance"

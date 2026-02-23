@@ -18,8 +18,9 @@ Output format — one file per gestalt JSON, same base name:
 
 Mapping priority per track:
   1. AcousticBrainz mood features  → weighted formula from mapping.toml
-  2. Zone label                    → anchor (V, E) from mapping.toml
-  3. No usable data                → excluded from output
+  2. Last.fm tags                  → tag-zone vote → anchor (V, E)
+  3. Zone label                    → anchor (V, E) from mapping.toml
+  4. No usable data                → excluded from output
 
 Usage:
     python distill.py [--mapping PATH] [--out DIR] [--split training|test|all]
@@ -64,6 +65,29 @@ def from_acousticbrainz(ab: dict, cfg: dict) -> tuple[float, float]:
         return max(0.0, min(1.0, total))
 
     return weighted(vc, ab), weighted(ec, ab)
+
+
+def from_lastfm_tags(tags: dict, cfg: dict) -> tuple[float, float] | None:
+    """
+    Classify a track into a zone using Last.fm tag votes, then return the
+    zone anchor (valence, energy). Tags are weighted by their Last.fm count
+    (0–100); the zone with the highest total score wins.
+    Returns None if no tags map to a known zone.
+    """
+    tag_zones = cfg.get("lastfm_tag_zones", {})
+    anchors   = cfg.get("zone_anchors", {})
+
+    votes: dict[str, float] = {}
+    for tag_name, count in tags.items():
+        zone = tag_zones.get(tag_name.lower())
+        if zone:
+            votes[zone] = votes.get(zone, 0.0) + count
+
+    if not votes:
+        return None
+
+    winning_zone = max(votes, key=lambda z: votes[z])
+    return from_zone(winning_zone, anchors)
 
 
 def from_zone(zone: str, anchors: dict) -> tuple[float, float] | None:
@@ -119,7 +143,7 @@ def main():
     print(f"  split   : {args.split}")
     print()
 
-    total_ab = total_zone = total_skipped = total_written = 0
+    total_ab = total_lfm = total_zone = total_skipped = total_written = 0
 
     for path in sorted(gestalt_dir.glob("*.json")):
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -144,6 +168,23 @@ def main():
                 v, e = from_acousticbrainz(ab, cfg)
                 source = "ab"
                 total_ab += 1
+            elif entry.get("lastfm_tags"):
+                result = from_lastfm_tags(entry["lastfm_tags"], cfg)
+                if result is not None:
+                    v, e = result
+                    source = "lastfm"
+                    total_lfm += 1
+                elif zone:
+                    result = from_zone(zone, anchors)
+                    if result is None:
+                        total_skipped += 1
+                        continue
+                    v, e = result
+                    source = "zone"
+                    total_zone += 1
+                else:
+                    total_skipped += 1
+                    continue
             elif zone:
                 result = from_zone(zone, anchors)
                 if result is None:
@@ -166,6 +207,7 @@ def main():
 
     print()
     print(f"  {total_ab:>4} tracks from AcousticBrainz features")
+    print(f"  {total_lfm:>4} tracks from Last.fm tag-zone classifier")
     print(f"  {total_zone:>4} tracks from zone anchor fallback")
     print(f"  {total_skipped:>4} tracks skipped")
     print(f"  {total_written:>4} total records written to {out_dir}")
