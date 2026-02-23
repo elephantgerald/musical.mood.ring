@@ -2,38 +2,31 @@
 """
 distill.py
 
-Reads all training tracks from data/musical-gestalt/, maps each to a
-(valence, energy) pair, and writes a compact sorted binary lookup file
-to data/musical-affective-memory/affective_memory.mmar.
+Reads all training tracks from data/musical-gestalt/, derives (valence, energy)
+for each track, and writes one JSON file per gestalt source to
+data/musical-affective-memory/.
+
+Output format — one file per gestalt JSON, same base name:
+  {
+    "<spotify_track_id>": {
+      "valence": <float 0.0–1.0>,
+      "energy":  <float 0.0–1.0>,
+      "source":  "ab" | "zone"
+    },
+    ...
+  }
 
 Mapping priority per track:
   1. AcousticBrainz mood features  → weighted formula from mapping.toml
   2. Zone label                    → anchor (V, E) from mapping.toml
   3. No usable data                → excluded from output
 
-The binary format is designed for binary search on the ESP32 with minimal
-RAM usage (seeks into the file, never loads it fully).
-
-Binary format — affective_memory.mmar:
-  HEADER  (16 bytes):
-    [4]  magic    b"MMAR"
-    [1]  version  0x01
-    [3]  reserved 0x000000
-    [4]  count    uint32 little-endian  (number of records)
-    [4]  reserved 0x00000000
-
-  RECORDS (10 bytes each, sorted ascending by hash):
-    [8]  hash     uint64 LE  FNV-1a 64-bit of Spotify track ID (ASCII)
-    [1]  valence  uint8      0 → 0.0, 255 → 1.0
-    [1]  energy   uint8      0 → 0.0, 255 → 1.0
-
 Usage:
-    python distill.py [--mapping PATH] [--out PATH] [--split training|test|all]
+    python distill.py [--mapping PATH] [--out DIR] [--split training|test|all]
 """
 
 import argparse
 import json
-import struct
 import tomllib
 from pathlib import Path
 
@@ -49,29 +42,6 @@ def project_root() -> Path:
             return p
         p = p.parent
     return Path(__file__).resolve().parent
-
-
-HEADER_SIZE  = 16
-RECORD_SIZE  = 10
-MAGIC        = b"MMAR"
-VERSION      = 0x01
-
-
-# ---------------------------------------------------------------------------
-# Hash
-# ---------------------------------------------------------------------------
-
-def fnv1a_64(s: str) -> int:
-    """
-    FNV-1a 64-bit hash of an ASCII string.
-    Identical implementation works in both CPython and MicroPython —
-    no external dependencies, deterministic across platforms.
-    """
-    h = 14695981039346656037  # FNV offset basis
-    for b in s.encode("ascii"):
-        h ^= b
-        h = (h * 1099511628211) & 0xFFFFFFFFFFFFFFFF  # FNV prime, masked to 64 bits
-    return h
 
 
 # ---------------------------------------------------------------------------
@@ -105,93 +75,22 @@ def from_zone(zone: str, anchors: dict) -> tuple[float, float] | None:
 
 
 # ---------------------------------------------------------------------------
-# Gestalt loader
-# ---------------------------------------------------------------------------
-
-def load_tracks(gestalt_dir: Path, split_filter: str, anchors: dict, cfg: dict) -> list[tuple[int, int, int]]:
-    """
-    Load all eligible tracks from gestalt JSON files.
-    Returns list of (hash, valence_u8, energy_u8) tuples.
-    """
-    records: list[tuple[int, int, int]] = []
-    stats = {"ab": 0, "zone": 0, "skipped": 0}
-
-    for path in sorted(gestalt_dir.glob("*.json")):
-        data = json.loads(path.read_text(encoding="utf-8"))
-        zone  = data.get("zone")
-        split = data.get("split", "training")
-
-        if split_filter != "all" and split != split_filter:
-            continue
-        if split == "skip":
-            continue
-
-        for tid in data.get("track_ids", []):
-            entry = data.get("metadata", {}).get(tid, {})
-            if entry.get("error"):
-                stats["skipped"] += 1
-                continue
-
-            ab = entry.get("acousticbrainz")
-            if ab:
-                v, e = from_acousticbrainz(ab, cfg)
-                stats["ab"] += 1
-            elif zone:
-                result = from_zone(zone, anchors)
-                if result is None:
-                    stats["skipped"] += 1
-                    continue
-                v, e = result
-                stats["zone"] += 1
-            else:
-                stats["skipped"] += 1
-                continue
-
-            h = fnv1a_64(tid)
-            records.append((h, round(v * 255), round(e * 255)))
-
-    return records, stats
-
-
-# ---------------------------------------------------------------------------
-# Binary writer
-# ---------------------------------------------------------------------------
-
-def write_mmar(path: Path, records: list[tuple[int, int, int]]) -> None:
-    """Write sorted binary MMAR file."""
-    records.sort(key=lambda r: r[0])
-
-    with open(path, "wb") as f:
-        # Header
-        f.write(MAGIC)
-        f.write(struct.pack("<B", VERSION))
-        f.write(b"\x00\x00\x00")                   # reserved
-        f.write(struct.pack("<I", len(records)))    # count
-        f.write(b"\x00\x00\x00\x00")               # reserved
-
-        # Records
-        for h, v, e in records:
-            f.write(struct.pack("<Q", h))
-            f.write(struct.pack("<BB", v, e))
-
-
-# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Distill gestalt features into a binary ESP32 lookup file."
+        description="Distill gestalt features into per-track (valence, energy) JSON."
     )
     parser.add_argument(
         "--mapping", metavar="PATH",
         default=str(Path(__file__).parent / "mapping.toml"),
-        help="Path to mapping.toml (default: mapping.toml alongside this script)"
+        help="Path to mapping.toml (default: alongside this script)"
     )
     parser.add_argument(
-        "--out", metavar="PATH",
+        "--out", metavar="DIR",
         default=None,
-        help="Output path (default: data/musical-affective-memory/affective_memory.mmar)"
+        help="Output directory (default: data/musical-affective-memory/)"
     )
     parser.add_argument(
         "--split", choices=["training", "test", "all"], default="training",
@@ -201,7 +100,7 @@ def main():
 
     root = project_root()
     gestalt_dir = root / "data" / "musical-gestalt"
-    out_path = Path(args.out) if args.out else root / "data" / "musical-affective-memory" / "affective_memory.mmar"
+    out_dir = Path(args.out) if args.out else root / "data" / "musical-affective-memory"
 
     if not gestalt_dir.exists():
         print("No data/musical-gestalt/ directory found.")
@@ -211,28 +110,65 @@ def main():
         cfg = tomllib.load(f)
 
     anchors = cfg.get("zone_anchors", {})
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    print("musical-distillery — Distill")
+    print("musical-distiller — Distill")
     print("─" * 40)
     print(f"  gestalt : {gestalt_dir}")
-    print(f"  output  : {out_path}")
+    print(f"  output  : {out_dir}")
     print(f"  split   : {args.split}")
     print()
 
-    records, stats = load_tracks(gestalt_dir, args.split, anchors, cfg)
+    total_ab = total_zone = total_skipped = total_written = 0
 
-    print(f"  {stats['ab']:>4} tracks from AcousticBrainz features")
-    print(f"  {stats['zone']:>4} tracks from zone anchor fallback")
-    print(f"  {stats['skipped']:>4} tracks skipped (no usable data)")
-    print(f"  {len(records):>4} total records")
+    for path in sorted(gestalt_dir.glob("*.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        zone  = data.get("zone")
+        split = data.get("split", "training")
+
+        if args.split != "all" and split != args.split:
+            continue
+        if split == "skip":
+            continue
+
+        out: dict[str, dict] = {}
+
+        for tid in data.get("track_ids", []):
+            entry = data.get("metadata", {}).get(tid, {})
+            if entry.get("error"):
+                total_skipped += 1
+                continue
+
+            ab = entry.get("acousticbrainz")
+            if ab:
+                v, e = from_acousticbrainz(ab, cfg)
+                source = "ab"
+                total_ab += 1
+            elif zone:
+                result = from_zone(zone, anchors)
+                if result is None:
+                    total_skipped += 1
+                    continue
+                v, e = result
+                source = "zone"
+                total_zone += 1
+            else:
+                total_skipped += 1
+                continue
+
+            out[tid] = {"valence": round(v, 6), "energy": round(e, 6), "source": source}
+
+        if out:
+            out_path = out_dir / path.name
+            out_path.write_text(json.dumps(out, indent=2), encoding="utf-8")
+            total_written += len(out)
+            print(f"  {path.stem}: {len(out)} tracks")
+
     print()
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    write_mmar(out_path, records)
-
-    size_kb = out_path.stat().st_size / 1024
-    print(f"  ✓ Written to {out_path}")
-    print(f"    {len(records)} records × {RECORD_SIZE} bytes = {size_kb:.1f} KB")
+    print(f"  {total_ab:>4} tracks from AcousticBrainz features")
+    print(f"  {total_zone:>4} tracks from zone anchor fallback")
+    print(f"  {total_skipped:>4} tracks skipped")
+    print(f"  {total_written:>4} total records written to {out_dir}")
     print()
 
 
