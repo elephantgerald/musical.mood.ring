@@ -17,7 +17,9 @@ No companion app. No cloud intermediary. The ESP32 handles everything.
 
 ## Concept
 
-Spotify exposes audio features for every track — notably `valence` (musical positivity) and `energy` (intensity). These two values place a track in a 2D mood space. The mood space is mapped to a continuous color field using a polar coordinate model: direction from neutral determines hue, distance from neutral determines saturation, and energy drives brightness.
+Each track can be characterised by two values — `valence` (musical positivity) and `energy` (intensity) — that place it in a 2D mood space. The mood space is mapped to a continuous color field using a polar coordinate model: direction from neutral determines hue, distance from neutral determines saturation, and energy drives brightness.
+
+Because Spotify's audio feature API is no longer accessible for new apps, these values are pre-computed offline via a four-stage data pipeline (see `src/musical-cultivator/` through `src/musical-bottler/`) and compiled into a compact binary lookup bundle that lives on the ESP32's flash.
 
 The three pixels represent:
 - **Pixel 1** — the most recent 3-minute poll
@@ -33,17 +35,20 @@ See [`DESIGN.md`](DESIGN.md) for a full account of the architecture, color model
 ```
 musical.mood.ring/
 ├── src/
-│   ├── esp32/          # MicroPython firmware
-│   └── mood-model/     # PC-side model calibration (Jupyter, Python)
+│   ├── musical-cultivator/   # Stage 1 — mine/import/scrape track metadata
+│   ├── musical-mash-bill/    # Stage 2 — MusicBrainz + AcousticBrainz + Last.fm enrichment
+│   ├── musical-distiller/    # Stage 3 — derive (valence, energy) JSON per track
+│   ├── musical-bottler/      # Stage 4 — compile MMAR binary bundle for ESP32
+│   └── musical-mood-ring/    # MicroPython firmware for the ESP32
 ├── tests/
-│   ├── unit/           # Hardware-mocked unit tests (pytest)
-│   ├── integration/    # Tests against mock Spotify API
-│   └── end-to-end/     # Hardware-in-loop
-├── build/              # Flash and deploy scripts
-├── docs/               # Supplementary documentation
-├── DESIGN.md           # Architecture and design decisions
-├── ETHOS.md            # Project philosophy and structure rules
-└── README.md           # This file
+│   ├── unit/                 # Hardware-mocked unit tests (pytest)
+│   ├── integration/          # Tests against mock Spotify API
+│   └── end-to-end/           # Hardware-in-loop
+├── build/                    # Flash and deploy scripts
+├── docs/                     # Supplementary documentation
+├── DESIGN.md                 # Architecture and design decisions
+├── ETHOS.md                  # Project philosophy and structure rules
+└── README.md                 # This file
 ```
 
 ## License

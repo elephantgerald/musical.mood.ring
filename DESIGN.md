@@ -8,7 +8,9 @@ This document captures the architectural decisions, design rationale, and implem
 
 musical.mood.ring is a self-contained ambient light system that reads the emotional character of a Spotify user's listening history and expresses it as color on three NeoPixel LEDs mounted inside a mechanical keyboard.
 
-The emotional character is derived from Spotify's audio feature data — specifically `valence` (musical positivity, 0–1) and `energy` (intensity, 0–1) — mapped through a continuous polar color model to an RGB output. The three pixels represent three time horizons: the most recent 3-minute poll, an hour-long exponentially weighted average, and a four-hour exponentially weighted average.
+The emotional character is derived from two values per track — `valence` (musical positivity, 0–1) and `energy` (intensity, 0–1) — mapped through a continuous polar color model to an RGB output. The three pixels represent three time horizons: the most recent 3-minute poll, an hour-long exponentially weighted average, and a four-hour exponentially weighted average.
+
+These values are pre-computed offline via the M0 pipeline and stored in a compact binary lookup file on the ESP32's flash. The ESP32 looks up each recently-played track ID at runtime; the Spotify audio features API is not used directly (it is permanently blocked for apps registered after November 2024).
 
 The system is entirely self-contained on the ESP32. No companion app, no cloud intermediary, no dependency on a running PC.
 
@@ -132,8 +134,12 @@ The Spotify Authorization Code flow is handled during the initial configuration 
 Every 3 minutes, the ESP32:
 1. Refreshes the access token if expired.
 2. Calls `GET /v1/me/player/recently-played?limit=50`.
-3. For each returned track, fetches audio features via `GET /v1/audio-features?ids={ids}` (batched).
+3. For each returned track ID, performs a binary search in the on-flash MMAR bundle to retrieve its pre-computed (valence, energy).
 4. Passes the (valence, energy) pairs with timestamps to the mood engine.
+
+Tracks not found in the bundle are silently skipped; the mood engine continues with the tracks it does have data for. The bundle is updated offline via the M0 pipeline and re-flashed as needed.
+
+**Note**: `GET /v1/audio-features` is permanently blocked for apps registered after November 2024. Runtime audio feature lookups are not possible; the pre-computed bundle is the only viable path.
 
 ---
 
@@ -253,17 +259,16 @@ Four PC-side sub-projects (see §9, Milestone 0). Validates the color function a
 **Goal**: Validate the polar color model against real audio feature data before writing firmware.
 
 Four-stage whisky pipeline. Workflow:
-1. `src/musical-cultivator/` — curates labeled track batches by zone (mine playlists, import URLs, scrape metadata). Output to `data/record-collection/`.
-2. `src/musical-mash-bill/` — enriches raw track records with MusicBrainz MBIDs and AcousticBrainz audio features. Output to `data/musical-gestalt/`.
-3. `src/musical-distiller/` — derives (valence, energy) from enriched features via `mapping.toml`. Output to `data/musical-affective-memory/` (one JSON per track).
+1. `src/musical-cultivator/` — curates labeled track batches by zone (mine playlists, import URLs, scrape metadata). Output to `data/musical-gestalt/`.
+2. `src/musical-mash-bill/` — three-phase enrichment: Phase 1 MusicBrainz (artist+title fuzzy match → MBID), Phase 2 AcousticBrainz (MBID → mood/BPM features), Phase 3 Last.fm (track.getTopTags for tracks with no AB coverage). Output written back to `data/musical-gestalt/` in-place.
+3. `src/musical-distiller/` — derives (valence, energy) from enriched features via `mapping.toml` using priority order: AB features → Last.fm tag-zone vote → explicit zone anchor. Output to `data/musical-affective-memory/` (one JSON per source playlist).
 4. `src/musical-bottler/` — compiles affective-memory JSONs into a versioned binary bundle (`data/musical-memory-bundle/memory-bundle-v{N}-{YYYYMMDD_HHMMSS}.bin`) in MMAR format for ESP32 binary search.
 5. Notebook analysis — plot training tracks in (valence, energy) space, verify anchor positions, fit H(θ) to the anchor color set.
 6. Notebook validation — apply the fitted function to a held-out test set. Verify colors feel musically correct.
 
-Training set: 680 labeled tracks across 8 zones in `data/musical-gestalt/`.
-Test set: tracks nominated separately, not referenced during model design.
+Training set: ~680 labeled tracks across 8 zones. Test set: `something_new` (~313 tracks, multi-zone, no zone label — used for step 6 validation only).
 
-**Note**: Spotify's `/v1/audio-features` endpoint is permanently blocked for apps registered after Nov 27, 2024. Audio features are sourced via AcousticBrainz archive (ISRC → MBID bridge) with Essentia local analysis as a fallback for tracks not in the archive.
+**Spotify audio features**: `/v1/audio-features` is permanently blocked for apps registered after Nov 27, 2024. Audio features are sourced via AcousticBrainz archive (artist+title → MusicBrainz MBID, then MBID → AB features). Last.fm tags serve as a tertiary fallback for tracks absent from both archives. Essentia local audio analysis is a planned Phase 4 for tracks the user has on disk.
 
 ### Milestone 1 — Repo Scaffolding
 Directory structure, `.gitignore`, `.gitattributes`, `CLAUDE.md`, hardware mock stubs, pytest configuration, Docker compose for mock Spotify server.
@@ -275,10 +280,10 @@ AP-mode config server, WiFi credential capture and validation, mDNS, `Timer.ONE_
 OAuth flow via config server, auth code exchange, refresh token storage, access token refresh logic.
 
 ### Milestone 4 — Spotify Polling
-Recently-played fetch, audio feature batch fetch, 3-minute poll loop, error handling and backoff.
+Recently-played fetch, 3-minute poll loop, MMAR bundle lookup for each track ID, error handling and backoff.
 
 ### Milestone 5 — Mood Engine
-Polar transform, H(θ) implementation (using fitted function from M0), saturation and brightness mappings, EWMA accumulators for 1h and 4h windows, pixel state machine.
+Polar transform, H(θ) implementation (using fitted function from M0), saturation and brightness mappings, EWMA accumulators for 1h and 4h windows, pixel state machine. (valence, energy) values sourced from on-flash MMAR bundle, not from Spotify API.
 
 ### Milestone 6 — Animations
 Startup flare, idle sparkle, slow mood transitions, NeoPixel status indicators for error states.
