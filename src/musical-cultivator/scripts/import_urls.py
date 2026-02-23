@@ -54,8 +54,8 @@ def main():
     )
     parser.add_argument("--playlist", required=True, help="Playlist name")
     parser.add_argument(
-        "--zone", required=True, choices=ZONE_OPTIONS,
-        help=f"Mood zone: {', '.join(ZONE_OPTIONS)}"
+        "--zone", default=None, choices=ZONE_OPTIONS,
+        help=f"Mood zone: {', '.join(ZONE_OPTIONS)} (omit for multi-zone test sets)"
     )
     parser.add_argument(
         "--split", default="training", choices=["training", "test", "skip"],
@@ -88,11 +88,12 @@ def main():
 
     record = {
         "playlist": args.playlist,
-        "zone": args.zone,
         "split": args.split,
         "track_count": len(track_ids),
         "track_ids": track_ids,
     }
+    if args.zone:
+        record["zone"] = args.zone
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(record, f, indent=2)
 
