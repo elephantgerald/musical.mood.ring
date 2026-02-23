@@ -242,8 +242,8 @@ A mock Spotify API server (FastAPI, containerized with Docker) returns canned re
 ### End-to-End Tests (`tests/end-to-end/`)
 Hardware-in-loop. Flash the device, verify behavior over serial assertions and visual inspection. This tier is intentionally thin — it exists to catch things that only manifest on real hardware (memory pressure, timing, hardware-specific behavior).
 
-### Mood Model Validation (`src/musical-gestaltifier/`)
-A separate PC-side sub-project (see §9, Milestone 0). Validates the color function against real audio feature data before any firmware is written.
+### Mood Model Validation (M0 pipeline)
+Four PC-side sub-projects (see §9, Milestone 0). Validates the color function against real audio feature data before any firmware is written.
 
 ---
 
@@ -252,11 +252,13 @@ A separate PC-side sub-project (see §9, Milestone 0). Validates the color funct
 ### Milestone 0 — Mood Model Calibration
 **Goal**: Validate the polar color model against real audio feature data before writing firmware.
 
-Sub-projects at `src/musical-gestaltifier/` and `src/musical-distillery/`. Workflow:
-1. `musical-gestaltifier/scripts/` — CLI tools to curate labeled track batches by zone, scrape metadata, and enrich with audio features. Output to `data/musical-gestalt/`.
-2. `musical-distillery/` — reads the gestalt store, computes (valence, energy) per track, and writes a compact binary lookup to `data/musical-affective-memory/` for use by the ESP32.
-3. Notebook analysis — plot training tracks in (valence, energy) space, verify anchor positions, fit H(θ) to the anchor color set.
-4. Notebook validation — apply the fitted function to a held-out test set. Verify colors feel musically correct.
+Four-stage whisky pipeline. Workflow:
+1. `src/musical-cultivator/` — curates labeled track batches by zone (mine playlists, import URLs, scrape metadata). Output to `data/record-collection/`.
+2. `src/musical-mash-bill/` — enriches raw track records with MusicBrainz MBIDs and AcousticBrainz audio features. Output to `data/musical-gestalt/`.
+3. `src/musical-distiller/` — derives (valence, energy) from enriched features via `mapping.toml`. Output to `data/musical-affective-memory/` (one JSON per track).
+4. `src/musical-bottler/` — compiles affective-memory JSONs into a versioned binary bundle (`data/musical-memory-bundle/memory-bundle-v{N}-{YYYYMMDD_HHMMSS}.bin`) in MMAR format for ESP32 binary search.
+5. Notebook analysis — plot training tracks in (valence, energy) space, verify anchor positions, fit H(θ) to the anchor color set.
+6. Notebook validation — apply the fitted function to a held-out test set. Verify colors feel musically correct.
 
 Training set: 680 labeled tracks across 8 zones in `data/musical-gestalt/`.
 Test set: tracks nominated separately, not referenced during model design.
