@@ -1,0 +1,38 @@
+# musical-distillery — AcousticBrainz → (valence, energy) mapping
+#
+# These weights are initial guesses. The M0 calibration notebook will tune
+# them against the zone-labeled training set in data/musical-gestalt/.
+#
+# Each formula is a weighted sum of AcousticBrainz mood classifier
+# probabilities plus a bias, clamped to [0.0, 1.0].
+#
+# valence: musical positiveness (0=negative/dark, 1=positive/bright)
+# energy : intensity and activity (0=calm/quiet, 1=intense/loud)
+
+[valence]
+mood_happy      =  0.6
+mood_sad        = -0.5
+mood_aggressive = -0.2
+mood_relaxed    =  0.1
+bias            =  0.5
+
+[energy]
+mood_aggressive =  0.4
+mood_relaxed    = -0.4
+mood_party      =  0.2
+mood_electronic =  0.1
+bpm_scale       =  0.001   # contribution per BPM unit
+bias            =  0.3
+
+# Zone anchor fallback — used when a track has no AcousticBrainz features.
+# Values are (valence, energy) estimates for each zone centre.
+# These match the anchor table in DESIGN.md §7.
+[zone_anchors]
+industrial       = [0.15, 0.85]
+darkwave         = [0.25, 0.55]
+shoegaze         = [0.30, 0.60]
+"zone-out"       = [0.40, 0.45]
+"indie-melancholy" = [0.35, 0.50]
+ambient          = [0.50, 0.15]
+americana        = [0.70, 0.35]
+"fun/dance"      = [0.75, 0.80]
