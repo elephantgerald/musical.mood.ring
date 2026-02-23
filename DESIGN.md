@@ -62,7 +62,7 @@ boot.py
 
 ### Source Structure
 ```
-src/esp32/
+src/musical-mood-ring/
 ├── boot.py           # Hardware init, WiFi, config server window
 ├── main.py           # Main loop: poll, compute, render
 ├── wlan.py           # WiFi client connection
@@ -242,23 +242,26 @@ A mock Spotify API server (FastAPI, containerized with Docker) returns canned re
 ### End-to-End Tests (`tests/end-to-end/`)
 Hardware-in-loop. Flash the device, verify behavior over serial assertions and visual inspection. This tier is intentionally thin — it exists to catch things that only manifest on real hardware (memory pressure, timing, hardware-specific behavior).
 
-### Mood Model Validation (`src/mood-model/`)
-A separate PC-side sub-project (see §9, Milestone 0). Validates the color function against real Spotify data before any firmware is written.
+### Mood Model Validation (`src/musical-gestaltifier/`)
+A separate PC-side sub-project (see §9, Milestone 0). Validates the color function against real audio feature data before any firmware is written.
 
 ---
 
 ## 9. Milestones
 
 ### Milestone 0 — Mood Model Calibration
-**Goal**: Validate the polar color model against real Spotify audio feature data before writing firmware.
+**Goal**: Validate the polar color model against real audio feature data before writing firmware.
 
-Sub-project at `src/mood-model/`. A Jupyter notebook workflow:
-1. `collect.py` — CLI tool that resolves albums against the Spotify catalog, fetches audio features for all tracks, and writes per-album summary statistics to `data/training.json` and `data/test.json`. Uses Client Credentials flow (no user OAuth needed for audio features).
-2. Notebook analysis — plot training albums in (valence, energy) space, verify anchor positions, fit H(θ) to the anchor color set.
-3. Notebook validation — apply the fitted function to a held-out test set of albums not seen during fitting. Verify that the colors feel musically correct.
+Sub-projects at `src/musical-gestaltifier/` and `src/musical-distillery/`. Workflow:
+1. `musical-gestaltifier/scripts/` — CLI tools to curate labeled track batches by zone, scrape metadata, and enrich with audio features. Output to `data/musical-gestalt/`.
+2. `musical-distillery/` — reads the gestalt store, computes (valence, energy) per track, and writes a compact binary lookup to `data/musical-affective-memory/` for use by the ESP32.
+3. Notebook analysis — plot training tracks in (valence, energy) space, verify anchor positions, fit H(θ) to the anchor color set.
+4. Notebook validation — apply the fitted function to a held-out test set. Verify colors feel musically correct.
 
-Training set: the 14 albums discussed above (listed with anchor zones in §7).
-Test set: albums nominated separately, not referenced during model design.
+Training set: 680 labeled tracks across 8 zones in `data/musical-gestalt/`.
+Test set: tracks nominated separately, not referenced during model design.
+
+**Note**: Spotify's `/v1/audio-features` endpoint is permanently blocked for apps registered after Nov 27, 2024. Audio features are sourced via AcousticBrainz archive (ISRC → MBID bridge) with Essentia local analysis as a fallback for tracks not in the archive.
 
 ### Milestone 1 — Repo Scaffolding
 Directory structure, `.gitignore`, `.gitattributes`, `CLAUDE.md`, hardware mock stubs, pytest configuration, Docker compose for mock Spotify server.

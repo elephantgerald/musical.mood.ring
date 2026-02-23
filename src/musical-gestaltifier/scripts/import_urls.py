@@ -76,7 +76,7 @@ def main():
         print("No track IDs found in input.", file=sys.stderr)
         sys.exit(1)
 
-    out_dir = project_root() / "data" / "pending"
+    out_dir = project_root() / "data" / "musical-gestalt"
     out_dir.mkdir(parents=True, exist_ok=True)
     safe_name = (
         args.playlist.lower()
@@ -102,7 +102,7 @@ def main():
     print(f"    split    : {args.split}")
     print(f"    → {out_path}")
     print()
-    print("  Run enrich.py (TODO) when quota resets to fetch audio features.")
+    print("  Run fetch_metadata.py to enrich with track names, then musical-distillery to compile.")
 
 
 if __name__ == "__main__":

@@ -71,7 +71,7 @@ def main():
         print("Get a free key at: https://www.last.fm/api/account/create")
         return
 
-    path = project_root() / "data" / "pending" / args.file
+    path = project_root() / "data" / "musical-gestalt" / args.file
     if not path.exists():
         print(f"File not found: {path}")
         return

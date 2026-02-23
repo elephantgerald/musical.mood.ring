@@ -4,7 +4,7 @@ fetch_metadata.py
 
 Resolves Spotify track IDs to human-readable metadata (track name, artist,
 album, year) by scraping Open Graph tags from Spotify's public web player.
-No API key required. Reads all JSON files in data/pending/, enriches them
+No API key required. Reads all JSON files in data/musical-gestalt/, enriches them
 with metadata, and writes the result back in-place.
 
 Usage:
@@ -108,7 +108,7 @@ def enrich_pending_file(path: Path, delay: float) -> int:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Enrich pending track batches with metadata from Spotify web player."
+        description="Enrich gestalt track batches with metadata from Spotify web player."
     )
     parser.add_argument(
         "--delay", type=float, default=0.5, metavar="SECONDS",
@@ -120,9 +120,9 @@ def main():
     )
     args = parser.parse_args()
 
-    pending_dir = project_root() / "data" / "pending"
+    pending_dir = project_root() / "data" / "musical-gestalt"
     if not pending_dir.exists():
-        print("No data/pending/ directory found.")
+        print("No data/musical-gestalt/ directory found.")
         return
 
     if args.file:
@@ -131,7 +131,7 @@ def main():
         files = sorted(pending_dir.glob("*.json"))
 
     if not files:
-        print("No .json files found in data/pending/.")
+        print("No .json files found in data/musical-gestalt/.")
         return
 
     print(f"musical.mood.ring — Metadata Fetcher")
