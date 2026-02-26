@@ -1,78 +1,147 @@
 # main.py
 #
-# Main poll loop for musical-mood-ring.
-# Runs after boot.py has established WiFi.
+# Main loop for musical-mood-ring.
 #
-# Every POLL_INTERVAL_MS:
-#   1. Refresh the Spotify access token if needed
-#   2. Fetch recently-played track IDs
-#   3. Run them through the mood engine (MMAR lookup + EWMA update)
-#   4. Write the three resulting colours to the NeoPixels
+# Runs after boot.py has established WiFi. Drives two interleaved concerns:
 #
-# TODO (M4): implement full error handling and exponential back-off (#28).
-# TODO (M6): add startup flare and idle sparkle animations (#35, #36).
+#   Poll cadence  — every 3 minutes, fetch recently-played from Spotify,
+#                   push through the mood engine, get new target colours.
+#                   Managed by Poller (handles back-off on errors).
+#
+#   Animation     — every FRAME_MS, advance the active animator and write
+#                   the result to the NeoPixels. The animation loop is never
+#                   blocked by polling — the poll is synchronous within one
+#                   frame, accepted latency ~1–2 s on a slow network.
+#
+# Animation state machine:
+#   idle sparkle  ← no bundle hits yet, or persistent API failure
+#       ↓  first hit after idle
+#   startup flare  (3 s fade-in)
+#       ↓  flare done
+#   mood transition  (60 s smooth HSV fade between mood targets)
+#       ↑  new target each poll while music plays
+#
+# Error overlays (exit back to idle sparkle when condition clears):
+#   wifi_lost  — slow dim red pulse
+#   auth_fail  — 3 red flashes, then idle sparkle
 
 import config
 import pixel
 import spotify
+import wifi
 from mmar        import load as mmar_load
 from mood_engine import MoodEngine
+from poller      import Poller
+from lights      import StartupFlare, IdleSparkle, MoodTransition, ErrorIndicator
 
-_POLL_INTERVAL_MS = 3 * 60 * 1000   # 3 minutes
-_BUNDLE_PATH      = "memory-bundle.bin"
+FRAME_MS    = 100          # ~10 fps animation update rate
+BUNDLE_PATH = "memory-bundle.bin"
 
 try:
     import utime
+    def _now_ms(): return utime.ticks_ms()
     def _sleep_ms(ms): utime.sleep_ms(ms)
 except ImportError:
     import time
+    def _now_ms(): return int(time.time() * 1000)
     def _sleep_ms(ms): time.sleep(ms / 1000)
 
 
-def _load_bundle():
-    try:
-        return mmar_load(_BUNDLE_PATH)
-    except OSError:
-        return None
-
-
 def main():
-    bundle = _load_bundle()
-    if bundle is None:
+    bundle = None
+    try:
+        bundle = mmar_load(BUNDLE_PATH)
+    except OSError:
         pixel.write([(0, 8, 8)] * 3)   # dim teal: bundle missing
         return
 
     engine       = MoodEngine(bundle)
+    poller       = Poller()
     access_token = None
     expires_at   = 0
 
-    try:
-        import utime
-        now_ms = utime.ticks_ms
-    except ImportError:
-        import time
-        now_ms = lambda: int(time.time() * 1000)
+    # Start in idle sparkle until music data arrives
+    animator     = IdleSparkle()
+    in_idle      = True    # True while we've never had a mood hit this session
+    error_mode   = None    # None | "wifi_lost" | "auth_fail"
 
+    prev_ms = _now_ms()
     pixel.write([(0, 16, 0)] * 3)   # dim green: ready
 
     while True:
-        # Refresh token when missing or near expiry
-        if access_token is None or now_ms() >= expires_at:
-            token, expires_in = spotify.refresh_token(
-                config.SPOTIFY_CLIENT_ID,
-                config.SPOTIFY_CLIENT_SECRET,
-                config.SPOTIFY_REFRESH_TOKEN,
-            )
-            if token:
-                access_token = token
-                expires_at   = now_ms() + (expires_in - 60) * 1000
+        now_ms = _now_ms()
+        dt_ms  = max(0, now_ms - prev_ms)
+        prev_ms = now_ms
 
-        if access_token:
-            track_ids = spotify.recently_played(access_token)
-            colors    = engine.update(track_ids)
-            pixel.write(colors)
+        # ── WiFi watchdog ───────────────────────────────────────────────
+        if not wifi.is_connected():
+            if error_mode != ErrorIndicator.WIFI_LOST:
+                animator   = ErrorIndicator(ErrorIndicator.WIFI_LOST)
+                error_mode = ErrorIndicator.WIFI_LOST
+        elif error_mode == ErrorIndicator.WIFI_LOST:
+            # WiFi recovered — return to idle sparkle
+            animator   = IdleSparkle()
+            error_mode = None
+            in_idle    = True
 
-        _sleep_ms(_POLL_INTERVAL_MS)
+        # ── Poll ────────────────────────────────────────────────────────
+        if error_mode is None and poller.should_poll(now_ms):
+            # Refresh access token when absent or near expiry
+            if access_token is None or now_ms >= expires_at:
+                token, expires_in = spotify.refresh_token(
+                    config.SPOTIFY_CLIENT_ID,
+                    config.SPOTIFY_CLIENT_SECRET,
+                    config.SPOTIFY_REFRESH_TOKEN,
+                )
+                if token:
+                    access_token = token
+                    expires_at   = now_ms + (expires_in - 60) * 1000
+                else:
+                    animator   = ErrorIndicator(ErrorIndicator.AUTH_FAIL)
+                    error_mode = ErrorIndicator.AUTH_FAIL
+                    poller.on_error(now_ms)
+
+            if access_token and error_mode is None:
+                track_ids = spotify.recently_played(access_token)
+                if track_ids is None:
+                    # Network/API error
+                    poller.on_error(now_ms)
+                else:
+                    new_colors = engine.update(track_ids)
+                    poller.on_success(now_ms)
+
+                    if poller.is_persistent_failure(now_ms):
+                        # Graceful degradation — treat as idle, not an error
+                        if not in_idle:
+                            animator = IdleSparkle()
+                            in_idle  = True
+                    else:
+                        was_idle = in_idle
+                        in_idle  = False
+                        if was_idle:
+                            animator = StartupFlare(new_colors)
+                        elif isinstance(animator, StartupFlare) and animator.done:
+                            animator = MoodTransition(new_colors, new_colors)
+                        elif isinstance(animator, MoodTransition):
+                            animator.update_target(new_colors)
+
+        # ── Auth-fail overlay: dismiss when done ────────────────────────
+        if (error_mode == ErrorIndicator.AUTH_FAIL
+                and isinstance(animator, ErrorIndicator)
+                and animator.done):
+            animator   = IdleSparkle()
+            error_mode = None
+
+        # ── Handoff: startup flare → mood transition ────────────────────
+        if isinstance(animator, StartupFlare) and animator.done:
+            last = engine.update([])   # get current colors without a poll
+            animator = MoodTransition(last, last)
+
+        # ── Advance animation and write pixels ──────────────────────────
+        colors = animator.step(dt_ms)
+        pixel.write(colors)
+
+        _sleep_ms(FRAME_MS)
 
 
 main()
