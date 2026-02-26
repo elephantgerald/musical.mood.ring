@@ -24,6 +24,10 @@ The three pixels show three different time slices of that mood space:
 
 When Spotify has been quiet, all three sparkle softly. When music starts, they flare to life together and slowly differentiate as history builds up.
 
+### Personalised color mapping
+
+The angle-to-hue mapping (`H(θ)`) is personal. Everyone's color intuition is slightly different — the hue that reads as "brooding" to one person may read as "serene" to another. The project stores this as a small JSON **synaesthesia profile** that gets flashed to the device alongside the mood bundle. A calibration notebook lets each person tune (or accept) the default mapping and export their own profile. The device works out of the box with the built-in defaults; the profile is an optional personalisation layer.
+
 ### A note on Spotify's API
 
 Spotify's audio features endpoint (`/v1/audio-features`) has been blocked for new developer apps since late 2024. This project works around it: valence and energy values are pre-computed offline from a combination of MusicBrainz, AcousticBrainz, and Last.fm data, then compiled into a compact binary lookup file that lives on the ESP32's flash. At runtime, the device does a binary search in that file for each recently-played track ID — no audio analysis happens on-device, and no blocked API is called.
@@ -76,6 +80,7 @@ This project is under active development. The offline data pipeline (Stages 1–
 
 ```
 src/
+├── mood-model/           # M0 calibration notebook (Jupyter)
 ├── musical-cultivator/   # Stage 1 — collect track IDs into data/musical-gestalt/
 ├── musical-mash-bill/    # Stage 2 — enrich with MusicBrainz, AcousticBrainz, Last.fm
 ├── musical-distiller/    # Stage 3 — derive (valence, energy) per track
@@ -84,7 +89,8 @@ src/
 data/
 ├── musical-gestalt/           # Raw track batches + enrichment data
 ├── musical-affective-memory/  # Derived (valence, energy) per track
-└── musical-memory-bundle/     # Compiled MMAR binaries ready to flash
+├── musical-memory-bundle/     # Compiled MMAR binaries ready to flash
+└── synaesthesia/              # Generated colour profiles (gitignored; flash to device)
 ```
 
 See [`DESIGN.md`](DESIGN.md) for the full architecture, color model math, WiFi configuration pattern, and milestone detail.
