@@ -57,14 +57,14 @@ To update the mood lookup bundle after adding music to your library, run the off
 
 ## Status
 
-This project is under active development. The offline data pipeline (Stages 1–4 below) is complete and producing MMAR bundles. The ESP32 firmware has not been written yet.
+This project is under active development. The offline data pipeline and mood model calibration are complete. The MicroPython firmware has its core logic written and unit-tested; WiFi and Spotify integration are next.
 
 **Milestones:**
 
 | # | Name | Status |
 |---|---|---|
 | M0 | Mood model calibration (offline pipeline) | Complete |
-| M1 | Repo scaffolding | In progress |
+| M1 | Firmware scaffold + unit test harness | Complete |
 | M2 | WiFi + configuration server | Not started |
 | M3 | Spotify OAuth | Not started |
 | M4 | Spotify polling | Not started |
@@ -85,7 +85,7 @@ src/
 ├── musical-mash-bill/    # Stage 2 — enrich with MusicBrainz, AcousticBrainz, Last.fm
 ├── musical-distiller/    # Stage 3 — derive (valence, energy) per track
 ├── musical-bottler/      # Stage 4 — compile binary MMAR bundle for ESP32
-└── musical-mood-ring/    # MicroPython firmware (not yet written)
+└── musical-mood-ring/    # MicroPython ESP32 firmware
 data/
 ├── musical-gestalt/           # Raw track batches + enrichment data
 ├── musical-affective-memory/  # Derived (valence, energy) per track

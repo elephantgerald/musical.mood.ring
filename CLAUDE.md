@@ -14,7 +14,7 @@ src/musical-cultivator/   # Stage 1: mine/import track IDs into data/musical-ges
 src/musical-mash-bill/    # Stage 2: enrich gestalt JSONs with MB + AB + Last.fm features
 src/musical-distiller/    # Stage 3: derive (V,E) per track → data/musical-affective-memory/
 src/musical-bottler/      # Stage 4: compile affective-memory into MMAR binary bundle
-src/musical-mood-ring/    # MicroPython ESP32 firmware (not yet written)
+src/musical-mood-ring/    # MicroPython ESP32 firmware
 data/musical-gestalt/     # Track metadata + enrichment (JSON per playlist, in-place enriched)
 data/musical-affective-memory/  # (valence, energy) per track ID (JSON per playlist)
 data/musical-memory-bundle/     # Versioned MMAR binaries for flashing to ESP32
@@ -75,6 +75,11 @@ python src/musical-distiller/distill.py [--split training|test|all]
 python src/musical-bottler/bottle.py
 ```
 
+**Unit tests** (pure CPython, no board needed):
+```bash
+pytest tests/unit/
+```
+
 **M0 calibration notebook** (visualise mood space, fit H(θ), export synaesthesia profile):
 ```bash
 source .venv/bin/activate
@@ -82,6 +87,26 @@ jupyter notebook src/mood-model/m0_calibration.ipynb
 # Run all cells → review plots → edit Final Parameters cell → run Export cell
 # Output: data/synaesthesia/synaesthesia-{name}.json
 ```
+
+## Firmware Modules (`src/musical-mood-ring/`)
+
+**Pure logic — CPython-compatible, fully unit-tested:**
+- `mmar.py` — MMAR binary search; `fnv1a_64` hash; `MMARBundle.lookup(track_id)`
+- `polar.py` — `to_polar(v, e)` → `(r, theta_deg)`
+- `ewma.py` — `EWMA(alpha)` accumulator with snap-on-first-update and `reset()`
+- `color.py` — `mood_to_rgb(v, e)` → `(r, g, b)` via synaesthesia profile; inline HSV→RGB
+- `mood_engine.py` — `MoodEngine(bundle).update(track_ids)` → 3 RGB tuples; now-pixel persistence across miss polls
+- `synaesthesia.py` — colour profile loader (see below)
+
+**Hardware glue — thin try/except wrappers, no-op in CPython:**
+- `pixel.py` — NeoPixel WS2812B driver (`write(colors)`, `off()`)
+- `wifi.py` — `connect(ssid, password)`, `is_connected()`
+- `spotify.py` — `recently_played(token)`, `refresh_token(id, secret, refresh)`
+- `config.py` — reads `config.json` from flash; exposes `WIFI_SSID`, `SPOTIFY_*` etc.
+- `boot.py` — WiFi boot sequence with dim-white status and red error blink
+- `main.py` — 3-minute poll loop skeleton (M4 implementation pending)
+
+The try/except convention: each module that needs a MicroPython-specific import wraps it in `try: import ujson / except ImportError: import json` (or equivalent). Pure modules have no such imports and run identically on both platforms.
 
 ## Synaesthesia Profile
 
