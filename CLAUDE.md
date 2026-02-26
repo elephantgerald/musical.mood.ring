@@ -25,14 +25,14 @@ tests/end-to-end/         # Hardware-in-loop
 build/                    # Flash/deploy scripts
 ```
 
-The venv currently lives at `src/musical-gestaltifier/.venv` (legacy location, not yet migrated to per-subproject venvs).
-
 ## Environment Setup
 
-Each sub-project has its own `requirements.txt`. The shared venv at `src/musical-gestaltifier/.venv` covers all pipeline stages for now:
+One venv covers everything — pipeline, notebook, and tests:
 
 ```bash
-source src/musical-gestaltifier/.venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
 **Credentials** — copy `.env.example` to `.env` in each sub-project that needs it:
@@ -77,7 +77,7 @@ python src/musical-bottler/bottle.py
 
 **M0 calibration notebook** (visualise mood space, fit H(θ), export synaesthesia profile):
 ```bash
-source src/musical-gestaltifier/.venv/bin/activate
+source .venv/bin/activate
 jupyter notebook src/mood-model/m0_calibration.ipynb
 # Run all cells → review plots → edit Final Parameters cell → run Export cell
 # Output: data/synaesthesia/synaesthesia-{name}.json

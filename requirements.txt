@@ -1,0 +1,25 @@
+# musical.mood.ring — consolidated Python dependencies
+#
+# Covers all sub-projects (pipeline stages 1–4, calibration notebook, tests).
+# Create the venv once from the repo root:
+#
+#   python3 -m venv .venv
+#   source .venv/bin/activate
+#   pip install -r requirements.txt
+
+# ── Stage 1: musical-cultivator ───────────────────────────────────────────
+spotipy>=2.23.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# ── Stage 2: musical-mash-bill (same deps as cultivator, already listed) ──
+
+# ── Calibration notebook + distiller ──────────────────────────────────────
+numpy>=1.24.0
+pandas>=2.0.0
+matplotlib>=3.7.0
+scipy>=1.10.0
+jupyter>=1.0.0
+
+# ── Testing ────────────────────────────────────────────────────────────────
+pytest>=8.0
