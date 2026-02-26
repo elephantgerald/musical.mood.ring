@@ -1,55 +1,95 @@
 # musical.mood.ring
 
-A self-contained ESP32 mood ring that surfaces emotional sentiment from your Spotify listening history as ambient light on your keyboard.
+Three tiny lights, mounted inside a mechanical keyboard, that glow with the emotional color of whatever you've been listening to on Spotify.
 
-Three NeoPixels, mounted inside a WASD CODE 2.0 keyboard shell, glow with colors derived from the audio characteristics of your recent listening — the last track, the last hour, the last four hours. When Spotify is quiet, the lights softly sparkle. When music starts, they wake up together and gradually differentiate as listening history accumulates.
+The leftmost light reflects the most recent track. The middle light is a slow average of the last hour. The right light holds the last four hours. When you've been working through dark electronic music all afternoon, the lights know. When you switched to something bright and dancey, you'll watch them drift.
 
-No companion app. No cloud intermediary. The ESP32 handles everything.
+No companion app. No PC script that has to be running. The ESP32 inside the keyboard handles everything — WiFi, Spotify auth, polling, math, LEDs.
+
+---
+
+## How It Works
+
+Every track can be described by two numbers: **valence** (how positive or dark the music feels) and **energy** (how intense or calm it is). These two values place a track in a 2D mood space. The mood space is mapped to color using a polar coordinate model — the direction from neutral determines the hue, the distance from neutral determines how saturated the color is, and energy determines brightness.
+
+The result is a continuous color field with no hard edges between moods. Dark, grinding industrial metal sits at blood crimson. Slow ambient drifts toward evening teal. Bright, danceable pop lands at electric green. The transitions between them are smooth and musical.
+
+The three pixels show three different time slices of that mood space:
+
+| Pixel | Time window |
+|---|---|
+| 1 — leftmost | Most recent 3-minute poll |
+| 2 — middle | Exponentially weighted average over the last hour |
+| 3 — rightmost | Exponentially weighted average over the last four hours |
+
+When Spotify has been quiet, all three sparkle softly. When music starts, they flare to life together and slowly differentiate as history builds up.
+
+### A note on Spotify's API
+
+Spotify's audio features endpoint (`/v1/audio-features`) has been blocked for new developer apps since late 2024. This project works around it: valence and energy values are pre-computed offline from a combination of MusicBrainz, AcousticBrainz, and Last.fm data, then compiled into a compact binary lookup file that lives on the ESP32's flash. At runtime, the device does a binary search in that file for each recently-played track ID — no audio analysis happens on-device, and no blocked API is called.
 
 ---
 
 ## Hardware
 
-- **Microcontroller**: ESP32 (MicroPython)
-- **LEDs**: 3× WS2812B NeoPixels, epoxy-mounted in drilled keyboard shell
-- **Power**: 5V stolen from keyboard USB rail
-- **Reflash port**: ESP32 USB-C routed to an externally accessible port on the keyboard
+The final build lives inside a **WASD CODE 2.0** keyboard shell:
 
-## Concept
+- **Microcontroller**: ESP32 running MicroPython
+- **LEDs**: 3× WS2812B NeoPixels, epoxy-mounted in three drilled holes in the keyboard's top shell
+- **Power**: 5V tapped from the keyboard's internal USB rail
+- **Reflash access**: The ESP32's USB-C port is routed to an externally accessible connector on the keyboard, so firmware can be updated without disassembly
 
-Each track can be characterised by two values — `valence` (musical positivity) and `energy` (intensity) — that place it in a 2D mood space. The mood space is mapped to a continuous color field using a polar coordinate model: direction from neutral determines hue, distance from neutral determines saturation, and energy drives brightness.
+The LEDs also serve as a status display — slow white for WiFi connecting, blue pulse while waiting for setup, steady green breathing while healthy, red flash on error.
 
-Because Spotify's audio feature API is no longer accessible for new apps, these values are pre-computed offline via a four-stage data pipeline (see `src/musical-cultivator/` through `src/musical-bottler/`) and compiled into a compact binary lookup bundle that lives on the ESP32's flash.
+---
 
-The three pixels represent:
-- **Pixel 1** — the most recent 3-minute poll
-- **Pixel 2** — an exponentially weighted average over the last hour
-- **Pixel 3** — an exponentially weighted average over the last four hours
+## Setup
 
-See [`DESIGN.md`](DESIGN.md) for a full account of the architecture, color model, WiFi configuration pattern, and milestone plan.
+On first boot, the ESP32 brings up a temporary WiFi access point alongside its normal operation. Connect to it, open a browser, and a single configuration page handles both WiFi credentials and Spotify OAuth. One session, one reboot, done. The device then advertises itself on the home network as `musical-mood-ring.local`.
+
+To update the mood lookup bundle after adding music to your library, run the offline pipeline on a PC and flash the new binary to the device.
+
+---
+
+## Status
+
+This project is under active development. The offline data pipeline (Stages 1–4 below) is complete and producing MMAR bundles. The ESP32 firmware has not been written yet.
+
+**Milestones:**
+
+| # | Name | Status |
+|---|---|---|
+| M0 | Mood model calibration (offline pipeline) | Complete |
+| M1 | Repo scaffolding | In progress |
+| M2 | WiFi + configuration server | Not started |
+| M3 | Spotify OAuth | Not started |
+| M4 | Spotify polling | Not started |
+| M5 | Mood engine | Not started |
+| M6 | Animations | Not started |
+| M7 | Hardening | Not started |
+| M8 | Physical test unit (breadboard) | Not started |
+| M9 | Physical forever unit (keyboard installation) | Not started |
 
 ---
 
 ## Project Structure
 
 ```
-musical.mood.ring/
-├── src/
-│   ├── musical-cultivator/   # Stage 1 — mine/import/scrape track metadata
-│   ├── musical-mash-bill/    # Stage 2 — MusicBrainz + AcousticBrainz + Last.fm enrichment
-│   ├── musical-distiller/    # Stage 3 — derive (valence, energy) JSON per track
-│   ├── musical-bottler/      # Stage 4 — compile MMAR binary bundle for ESP32
-│   └── musical-mood-ring/    # MicroPython firmware for the ESP32
-├── tests/
-│   ├── unit/                 # Hardware-mocked unit tests (pytest)
-│   ├── integration/          # Tests against mock Spotify API
-│   └── end-to-end/           # Hardware-in-loop
-├── build/                    # Flash and deploy scripts
-├── docs/                     # Supplementary documentation
-├── DESIGN.md                 # Architecture and design decisions
-├── ETHOS.md                  # Project philosophy and structure rules
-└── README.md                 # This file
+src/
+├── musical-cultivator/   # Stage 1 — collect track IDs into data/musical-gestalt/
+├── musical-mash-bill/    # Stage 2 — enrich with MusicBrainz, AcousticBrainz, Last.fm
+├── musical-distiller/    # Stage 3 — derive (valence, energy) per track
+├── musical-bottler/      # Stage 4 — compile binary MMAR bundle for ESP32
+└── musical-mood-ring/    # MicroPython firmware (not yet written)
+data/
+├── musical-gestalt/           # Raw track batches + enrichment data
+├── musical-affective-memory/  # Derived (valence, energy) per track
+└── musical-memory-bundle/     # Compiled MMAR binaries ready to flash
 ```
+
+See [`DESIGN.md`](DESIGN.md) for the full architecture, color model math, WiFi configuration pattern, and milestone detail.
+
+---
 
 ## License
 
