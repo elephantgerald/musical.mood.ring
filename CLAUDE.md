@@ -28,17 +28,12 @@ build/firmware/           # Downloaded MicroPython binaries (gitignored)
 
 ## Environment Setup
 
-One venv covers everything — pipeline, notebook, and tests:
+See [`docs/SETUP.md`](docs/SETUP.md) for the full developer setup: venv, all
+`.env` files, external service credentials (Spotify, Last.fm, MusicBrainz /
+AcousticBrainz), and WSL2 flash prerequisites.
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-**Credentials** — copy `.env.example` to `.env` in each sub-project that needs it:
-- `src/musical-cultivator/.env` — `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`
-- `src/musical-mash-bill/.env` — `LASTFM_API_KEY`
+For Spotify app registration specifically (redirect URI, user allowlist, API
+limitations), see [`docs/SPOTIFY-APP-REGISTRATION.md`](docs/SPOTIFY-APP-REGISTRATION.md).
 
 ## M0 Pipeline Commands
 
@@ -115,12 +110,15 @@ jupyter notebook src/mood-model/m0_calibration.ipynb
 - `synaesthesia.py` — colour profile loader (see below)
 
 **Hardware glue — thin try/except wrappers, no-op in CPython:**
-- `pixel.py` — NeoPixel WS2812B driver (`write(colors)`, `off()`)
-- `wifi.py` — `connect(ssid, password)`, `is_connected()`
-- `spotify.py` — `recently_played(token)`, `refresh_token(id, secret, refresh)`
-- `config.py` — reads `config.json` from flash; exposes `WIFI_SSID`, `SPOTIFY_*` etc.
-- `boot.py` — WiFi boot sequence with dim-white status and red error blink
-- `main.py` — 3-minute poll loop skeleton (M4 implementation pending)
+- `pixel.py` — NeoPixel WS2812B driver (`write(colors)`, `off()`); clamps to [0, 255]
+- `wifi.py` — `connect(ssid, password)`, `is_connected()`, `try_connect(ssid, password)`
+- `ap.py` — `allow_configure()` / `disallow_configure()` (AP_IF wrapper)
+- `mdns.py` — `start(hostname)` / `stop()` (mDNS advertisement)
+- `spotify.py` — `auth_url()`, `exchange_code()`, `recently_played()`, `refresh_token()`
+- `config.py` — reads/writes `config.json`; `save(data)` merges, `reload()` refreshes constants
+- `config_server.py` — non-blocking HTTP server; WiFi setup (AP mode) + Spotify OAuth (STA mode)
+- `boot.py` — first-boot AP setup, then normal-boot WiFi connect + Spotify OAuth if needed
+- `main.py` — 3-minute poll loop; WDT, gc, active WiFi reconnect, panic guard
 
 The try/except convention: each module that needs a MicroPython-specific import wraps it in `try: import ujson / except ImportError: import json` (or equivalent). Pure modules have no such imports and run identically on both platforms.
 

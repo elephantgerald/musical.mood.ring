@@ -49,15 +49,25 @@ The LEDs also serve as a status display — slow white for WiFi connecting, blue
 
 ## Setup
 
-On first boot, the ESP32 brings up a temporary WiFi access point alongside its normal operation. Connect to it, open a browser, and a single configuration page handles both WiFi credentials and Spotify OAuth. One session, one reboot, done. The device then advertises itself on the home network as `musical-mood-ring.local`.
+On first boot, the ESP32 brings up a temporary WiFi access point. Connect to it,
+open a browser, and a configuration page collects WiFi credentials. After
+reconnecting, a second page handles Spotify OAuth. One reboot, done. The device
+then advertises itself on the home network as `musical-mood-ring.local`.
 
-To update the mood lookup bundle after adding music to your library, run the offline pipeline on a PC and flash the new binary to the device.
+To update the mood lookup bundle after adding music to your library, run the
+offline pipeline on a PC and flash the new binary to the device.
+
+Developer setup (virtualenv, API keys, ESP32 flashing):
+→ [`docs/SETUP.md`](docs/SETUP.md)
+
+Spotify app registration (redirect URI, user allowlist, API limitations):
+→ [`docs/SPOTIFY-APP-REGISTRATION.md`](docs/SPOTIFY-APP-REGISTRATION.md)
 
 ---
 
 ## Status
 
-This project is under active development. The offline data pipeline and mood model calibration are complete. The MicroPython firmware has its core logic written and unit-tested; WiFi and Spotify integration are next.
+Software is complete through M7. Waiting on hardware (NeoPixel chain) for M8.
 
 **Milestones:**
 
@@ -65,13 +75,13 @@ This project is under active development. The offline data pipeline and mood mod
 |---|---|---|
 | M0 | Mood model calibration (offline pipeline) | Complete |
 | M1 | Firmware scaffold + unit test harness | Complete |
-| M2 | WiFi + configuration server | Not started |
-| M3 | Spotify OAuth | Not started |
+| M2 | WiFi + configuration server | Complete |
+| M3 | Spotify OAuth | Complete |
 | M4 | Spotify polling | Complete |
-| M5 | Mood engine | Not started |
+| M5 | Mood engine | Complete |
 | M6 | Animations | Complete |
-| M7 | Hardening | Not started |
-| M8 | Physical test unit (breadboard) | Not started |
+| M7 | Hardening | Complete |
+| M8 | Physical test unit (breadboard) | In progress |
 | M9 | Physical forever unit (keyboard installation) | Not started |
 
 ---
