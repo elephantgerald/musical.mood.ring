@@ -44,3 +44,18 @@ def is_connected():
         return True
     sta = _network.WLAN(_network.STA_IF)
     return sta.active() and sta.isconnected()
+
+
+def try_connect(ssid, password, timeout_ms=8000):
+    """
+    Try to connect with given credentials. Used by config_server to validate
+    credentials before saving them.
+    Returns the assigned IP string on success, None on failure.
+    """
+    if not _HW:
+        return "192.168.1.1"  # assume reachable in non-hardware environments
+    ok = connect(ssid, password, timeout_ms)
+    if not ok:
+        return None
+    sta = _network.WLAN(_network.STA_IF)
+    return sta.ifconfig()[0]

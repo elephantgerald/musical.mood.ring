@@ -1,6 +1,6 @@
 import pytest
 from lights import (
-    StartupFlare, IdleSparkle, MoodTransition, ErrorIndicator,
+    StartupFlare, IdleSparkle, MoodTransition, ErrorIndicator, BootStatus,
     _rgb_to_hsv, _hsv_to_rgb_int, _lerp_hue,
     _IDLE_OFF, _IDLE_PEAK,
 )
@@ -244,3 +244,141 @@ def test_auth_fail_outputs_black_when_done():
     assert e.done
     out = e.step(0)
     assert all(rgb == (0, 0, 0) for rgb in out)
+
+
+# ── BootStatus ──────────────────────────────────────────────────────────────
+
+def test_connecting_output_is_white():
+    b = BootStatus(BootStatus.CONNECTING)
+    for _ in range(10):
+        for r, g, bv in b.step(50):
+            assert r == g == bv, f"CONNECTING pixel must be white, got ({r},{g},{bv})"
+
+
+def test_connecting_cycles_through_pixels():
+    """Over a full rotation at least two pixels should differ in brightness."""
+    b = BootStatus(BootStatus.CONNECTING)
+    varied = False
+    for _ in range(30):
+        frame = b.step(50)
+        if len(set(frame)) > 1:
+            varied = True
+            break
+    assert varied, "CONNECTING pixels must vary (comet effect)"
+
+
+def test_connecting_not_done():
+    b = BootStatus(BootStatus.CONNECTING)
+    for _ in range(100):
+        b.step(50)
+    assert not b.done
+
+
+def test_config_wait_is_blue():
+    b = BootStatus(BootStatus.CONFIG_WAIT)
+    for _ in range(20):
+        for r, g, blue in b.step(100):
+            assert r == 0, f"CONFIG_WAIT r must be 0, got {r}"
+            assert g == 0, f"CONFIG_WAIT g must be 0, got {g}"
+
+
+def test_config_wait_blue_channel_reaches_nonzero():
+    b = BootStatus(BootStatus.CONFIG_WAIT)
+    blues = []
+    for _ in range(30):
+        frame = b.step(100)
+        blues.extend(bv for _, _, bv in frame)
+    assert max(blues) > 0, "CONFIG_WAIT blue channel must pulse above 0"
+
+
+def test_config_wait_not_done():
+    b = BootStatus(BootStatus.CONFIG_WAIT)
+    for _ in range(100):
+        b.step(50)
+    assert not b.done
+
+
+def test_success_is_green():
+    b = BootStatus(BootStatus.SUCCESS)
+    for r, g, bv in b.step(0):
+        assert r == 0,  f"SUCCESS r must be 0, got {r}"
+        assert bv == 0, f"SUCCESS b must be 0, got {bv}"
+        assert g >= 0
+
+
+def test_success_starts_bright():
+    b = BootStatus(BootStatus.SUCCESS)
+    frame = b.step(0)
+    assert any(g > 0 for _, g, _ in frame), "SUCCESS must be green at start"
+
+
+def test_success_done_after_duration():
+    b = BootStatus(BootStatus.SUCCESS)
+    b.step(BootStatus._SUCCESS_MS + 1)
+    assert b.done
+
+
+def test_success_outputs_black_when_done():
+    b = BootStatus(BootStatus.SUCCESS)
+    b.step(BootStatus._SUCCESS_MS + 1)
+    assert b.done
+    out = b.step(0)
+    assert all(rgb == (0, 0, 0) for rgb in out)
+
+
+def test_fail_produces_red():
+    b = BootStatus(BootStatus.FAIL)
+    frames = [b.step(100) for _ in range(10)]
+    any_red = any(
+        all(r > 0 and g == 0 and bv == 0 for r, g, bv in frame)
+        for frame in frames
+    )
+    assert any_red, "FAIL mode must produce red flashes"
+
+
+def test_fail_done_after_three_flashes():
+    b = BootStatus(BootStatus.FAIL)
+    b.step(3600)   # 3 × (700 on + 500 off) = 3600 ms
+    assert b.done
+
+
+def test_fail_outputs_black_when_done():
+    b = BootStatus(BootStatus.FAIL)
+    b.step(4000)
+    assert b.done
+    out = b.step(0)
+    assert all(rgb == (0, 0, 0) for rgb in out)
+
+
+def test_boot_status_brightness_ceiling():
+    """All BootStatus modes must stay ≤ 128 (50% brightness ceiling)."""
+    for mode in [BootStatus.CONNECTING, BootStatus.CONFIG_WAIT,
+                 BootStatus.SUCCESS, BootStatus.FAIL]:
+        b = BootStatus(mode)
+        for _ in range(40):
+            for r, g, bv in b.step(50):
+                assert r <= 128, f"{mode}: r={r} exceeds ceiling"
+                assert g <= 128, f"{mode}: g={g} exceeds ceiling"
+                assert bv <= 128, f"{mode}: b={bv} exceeds ceiling"
+
+
+def test_boot_status_output_length():
+    """Every mode must return exactly 3 pixels each step."""
+    for mode in [BootStatus.CONNECTING, BootStatus.CONFIG_WAIT,
+                 BootStatus.SUCCESS, BootStatus.FAIL]:
+        b = BootStatus(mode)
+        for _ in range(5):
+            out = b.step(50)
+            assert len(out) == 3, f"{mode}: expected 3 pixels, got {len(out)}"
+
+
+def test_boot_status_channels_in_range():
+    """All channel values must be in [0, 255]."""
+    for mode in [BootStatus.CONNECTING, BootStatus.CONFIG_WAIT,
+                 BootStatus.SUCCESS, BootStatus.FAIL]:
+        b = BootStatus(mode)
+        for _ in range(20):
+            for r, g, bv in b.step(100):
+                assert 0 <= r <= 255
+                assert 0 <= g <= 255
+                assert 0 <= bv <= 255

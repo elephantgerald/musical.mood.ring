@@ -228,3 +228,70 @@ class ErrorIndicator:
             return [color] * 3
 
         return [(0, 0, 0)] * 3   # unknown mode — safe default
+
+
+# ── BootStatus ──────────────────────────────────────────────────────────────
+
+class BootStatus:
+    """
+    Boot-sequence animations. Non-blocking, driven by step(dt_ms).
+    All modes respect a 50% brightness ceiling (channel values ≤ 128).
+
+    Modes:
+      CONNECTING  — slow white comet rotating across the 3 pixels (WiFi attempt)
+      CONFIG_WAIT — slow blue sinusoidal pulse (AP up, waiting for user)
+      SUCCESS     — brief green flash that fades out; done=True when finished
+      FAIL        — 3 red flashes (reuses ErrorIndicator.AUTH_FAIL)
+    """
+
+    CONNECTING  = "connecting"
+    CONFIG_WAIT = "config_wait"
+    SUCCESS     = "success"
+    FAIL        = "fail"
+
+    _ROTATE_PERIOD_MS = 1200   # one full comet rotation
+    _PULSE_PERIOD_MS  = 2000   # one full breath cycle
+    _SUCCESS_MS       = 1500   # green fade-out duration
+
+    def __init__(self, mode):
+        self._mode    = mode
+        self._elapsed = 0
+        self.done     = False
+        self._fail    = ErrorIndicator(ErrorIndicator.AUTH_FAIL) if mode == self.FAIL else None
+
+    def step(self, dt_ms):
+        self._elapsed += dt_ms
+
+        if self._mode == self.CONNECTING:
+            # Comet: one pixel bright, neighbours dim, rotates around 3 pixels
+            pos = (self._elapsed % self._ROTATE_PERIOD_MS) / self._ROTATE_PERIOD_MS * 3
+            colors = []
+            for i in range(3):
+                d = (pos - i) % 3
+                if d > 1.5:
+                    d = 3.0 - d
+                v = max(0.0, 1.0 - d) * 128
+                c = int(v)
+                colors.append((c, c, c))
+            return colors
+
+        if self._mode == self.CONFIG_WAIT:
+            phase = (self._elapsed % self._PULSE_PERIOD_MS) / self._PULSE_PERIOD_MS
+            v = int(64 * (1.0 - math.cos(2 * math.pi * phase)))  # 0 → 128
+            return [(0, 0, v)] * 3
+
+        if self._mode == self.SUCCESS:
+            if self._elapsed >= self._SUCCESS_MS:
+                self.done = True
+                return [(0, 0, 0)] * 3
+            frac = 1.0 - self._elapsed / self._SUCCESS_MS  # fade out
+            v = int(128 * frac)
+            return [(0, v, 0)] * 3
+
+        if self._mode == self.FAIL:
+            out = self._fail.step(dt_ms)
+            if self._fail.done:
+                self.done = True
+            return out
+
+        return [(0, 0, 0)] * 3   # unknown mode — safe default
