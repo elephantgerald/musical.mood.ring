@@ -67,9 +67,9 @@ This project is under active development. The offline data pipeline and mood mod
 | M1 | Firmware scaffold + unit test harness | Complete |
 | M2 | WiFi + configuration server | Not started |
 | M3 | Spotify OAuth | Not started |
-| M4 | Spotify polling | Not started |
+| M4 | Spotify polling | Complete |
 | M5 | Mood engine | Not started |
-| M6 | Animations | Not started |
+| M6 | Animations | Complete |
 | M7 | Hardening | Not started |
 | M8 | Physical test unit (breadboard) | Not started |
 | M9 | Physical forever unit (keyboard installation) | Not started |
@@ -91,6 +91,9 @@ data/
 ├── musical-affective-memory/  # Derived (valence, energy) per track
 ├── musical-memory-bundle/     # Compiled MMAR binaries ready to flash
 └── synaesthesia/              # Generated colour profiles (gitignored; flash to device)
+build/
+├── reset.sh              # Erase and reflash the ESP32 with the latest MicroPython
+└── firmware/             # Downloaded MicroPython binaries (gitignored)
 ```
 
 See [`DESIGN.md`](DESIGN.md) for the full architecture, color model math, WiFi configuration pattern, and milestone detail.

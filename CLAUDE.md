@@ -23,6 +23,7 @@ tests/unit/               # pytest, hardware-mocked
 tests/integration/        # Mock Spotify API server
 tests/end-to-end/         # Hardware-in-loop
 build/                    # Flash/deploy scripts
+build/firmware/           # Downloaded MicroPython binaries (gitignored)
 ```
 
 ## Environment Setup
@@ -78,6 +79,21 @@ python src/musical-bottler/bottle.py
 **Unit tests** (pure CPython, no board needed):
 ```bash
 pytest tests/unit/
+```
+
+**Flash MicroPython to the ESP32** (WSL2 + HUZZAH32):
+```bash
+./build/reset.sh          # auto-activates .venv; prompts for usbipd if board not found
+./build/reset.sh --help   # full usage
+```
+
+One-time WSL2 prerequisites:
+```bash
+sudo apt install linux-tools-generic hwdata
+echo 'SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", MODE="0666", GROUP="dialout"' \
+    | sudo tee /etc/udev/rules.d/99-esp32.rules
+sudo udevadm control --reload-rules
+# Ensure /etc/wsl.conf has: [boot]\nsystemd=true
 ```
 
 **M0 calibration notebook** (visualise mood space, fit H(θ), export synaesthesia profile):
@@ -143,7 +159,7 @@ Public API: `hue(theta_deg)`, `saturation_k()`, `brightness_floor()`, `brightnes
 
 **mDNS**: Device advertises as `musical-mood-ring.local`, providing a stable Spotify OAuth redirect URI (`http://musical-mood-ring.local/callback`) regardless of DHCP-assigned IP.
 
-**Deployment**: `mpremote` (not ampy) for flashing MicroPython firmware to the ESP32.
+**Deployment**: `mpremote` (not ampy) for flashing files to the ESP32. Use `build/reset.sh` to erase and reflash MicroPython itself.
 
 ## Data File Format
 

@@ -23,7 +23,6 @@ env/
 pip-wheel-metadata/
 *.egg-info/
 dist/
-build/
 .eggs/
 
 # --- Jupyter ---
@@ -38,7 +37,7 @@ src/mood-model/data/
 *.mpy
 
 # --- ESP32 firmware binaries (fetched by build scripts) ---
-build/firmware/*.bin
+build/firmware/
 
 # --- OS ---
 .DS_Store
