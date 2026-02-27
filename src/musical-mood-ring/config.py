@@ -40,9 +40,16 @@ SPOTIFY_REFRESH_TOKEN = get("spotify_refresh_token")
 
 
 def save(data):
-    """Write data dict to config.json (full replacement)."""
+    """Merge data into the existing config and write to config.json."""
+    existing = {}
+    try:
+        with open(_PATH) as f:
+            existing = json.load(f)
+    except OSError:
+        pass
+    existing.update(data)
     with open(_PATH, "w") as f:
-        json.dump(data, f)
+        json.dump(existing, f)
 
 
 def reload():

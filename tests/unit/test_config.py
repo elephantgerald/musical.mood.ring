@@ -14,14 +14,26 @@ def test_save_writes_valid_json(tmp_path, monkeypatch):
     assert data["wifi_password"] == "s3cret"
 
 
-def test_save_full_replacement(tmp_path, monkeypatch):
-    """save() overwrites the entire file; old keys are gone."""
+def test_save_updates_existing_value(tmp_path, monkeypatch):
+    """Second save with same key overwrites the first value."""
     cfg_file = tmp_path / "config.json"
     monkeypatch.setattr(config, "_PATH", str(cfg_file))
     config.save({"wifi_ssid": "A", "wifi_password": "pw"})
     config.save({"wifi_ssid": "B", "wifi_password": "pw2"})
     data = json.loads(cfg_file.read_text())
     assert data["wifi_ssid"] == "B"
+
+
+def test_save_merges_with_existing(tmp_path, monkeypatch):
+    """WiFi creds must survive a subsequent Spotify token save."""
+    cfg_file = tmp_path / "config.json"
+    monkeypatch.setattr(config, "_PATH", str(cfg_file))
+    config.save({"wifi_ssid": "MyNet", "wifi_password": "pw"})
+    config.save({"spotify_refresh_token": "rtoken"})
+    data = json.loads(cfg_file.read_text())
+    assert data["wifi_ssid"]            == "MyNet"
+    assert data["wifi_password"]        == "pw"
+    assert data["spotify_refresh_token"] == "rtoken"
 
 
 # ── reload() ───────────────────────────────────────────────────────────────

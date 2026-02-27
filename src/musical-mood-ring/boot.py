@@ -71,6 +71,27 @@ else:
         success = BootStatus(BootStatus.SUCCESS)
         pixel.write(success.step(0))
         _sleep_ms(BootStatus._SUCCESS_MS)
+
+        # ── Spotify setup (if no refresh token yet) ──────────────────────
+        if not config.SPOTIFY_REFRESH_TOKEN:
+            from config_server import ConfigServer
+            server   = ConfigServer()
+            animator = BootStatus(BootStatus.CONFIG_WAIT)
+            if _HW:
+                def _spotify_timeout_cb(t):
+                    server.stop()
+                _stimer = machine.Timer(-1)
+                _stimer.init(
+                    mode=machine.Timer.ONE_SHOT,
+                    period=300_000,
+                    callback=_spotify_timeout_cb,
+                )
+            while not server.done:
+                server.step()
+                pixel.write(animator.step(FRAME_MS))
+                _sleep_ms(FRAME_MS)
+            config.reload()   # pick up refresh_token if OAuth completed
+
         # Fall through — MicroPython runs main.py next
     else:
         error = ErrorIndicator(ErrorIndicator.WIFI_LOST)

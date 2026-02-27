@@ -62,7 +62,8 @@ def test_step_is_noop_when_done():
 
 # ── GET / — HTML form ────────────────────────────────────────────────────────
 
-def test_get_root_serves_form():
+def test_get_root_serves_form(monkeypatch):
+    monkeypatch.setattr(config_server.config, "WIFI_SSID", "")
     server = _make_server()
     conn = MagicMock()
     server._dispatch(conn, "GET / HTTP/1.1\r\nHost: 192.168.4.1\r\n\r\n")
@@ -72,7 +73,8 @@ def test_get_root_serves_form():
     assert 'action=/wifi' in body
 
 
-def test_get_root_contains_ssid_input():
+def test_get_root_contains_ssid_input(monkeypatch):
+    monkeypatch.setattr(config_server.config, "WIFI_SSID", "")
     server = _make_server()
     conn = MagicMock()
     server._dispatch(conn, "GET / HTTP/1.1\r\n\r\n")
@@ -80,24 +82,141 @@ def test_get_root_contains_ssid_input():
     assert 'name=ssid' in body
 
 
-# ── GET /spotify/auth and /spotify/callback — stubs ─────────────────────────
+# ── GET / — context-aware home page ─────────────────────────────────────────
 
-def test_get_spotify_auth_returns_stub():
+def test_get_root_no_wifi_ssid_shows_wifi_form(monkeypatch):
+    monkeypatch.setattr(config_server.config, "WIFI_SSID", "")
+    server = _make_server()
+    conn = MagicMock()
+    server._dispatch(conn, "GET / HTTP/1.1\r\n\r\n")
+    body = conn.send.call_args[0][0].decode()
+    assert "action=/wifi" in body
+
+
+def test_get_root_wifi_set_no_spotify_shows_creds_form(monkeypatch):
+    monkeypatch.setattr(config_server.config, "WIFI_SSID", "MyNet")
+    monkeypatch.setattr(config_server.config, "SPOTIFY_CLIENT_ID", "")
+    server = _make_server()
+    conn = MagicMock()
+    server._dispatch(conn, "GET / HTTP/1.1\r\n\r\n")
+    body = conn.send.call_args[0][0].decode()
+    assert "/spotify/credentials" in body
+
+
+def test_get_root_spotify_creds_set_shows_authorize(monkeypatch):
+    monkeypatch.setattr(config_server.config, "WIFI_SSID", "MyNet")
+    monkeypatch.setattr(config_server.config, "SPOTIFY_CLIENT_ID", "cid123")
+    server = _make_server()
+    conn = MagicMock()
+    server._dispatch(conn, "GET / HTTP/1.1\r\n\r\n")
+    body = conn.send.call_args[0][0].decode()
+    assert "/spotify/auth" in body
+
+
+# ── POST /spotify/credentials ────────────────────────────────────────────────
+
+def test_post_spotify_credentials_saves_and_redirects(monkeypatch):
+    saved = {}
+    monkeypatch.setattr(config_server.config, "save",   lambda d: saved.update(d))
+    monkeypatch.setattr(config_server.config, "reload", lambda: None)
+    server = _make_server()
+    conn = MagicMock()
+    server._dispatch(conn, "POST /spotify/credentials HTTP/1.1\r\n\r\nclient_id=cid&client_secret=csec")
+    assert saved.get("spotify_client_id")     == "cid"
+    assert saved.get("spotify_client_secret") == "csec"
+    response = conn.send.call_args[0][0].decode()
+    assert "302" in response
+    assert "Location: /" in response
+
+
+def test_post_spotify_credentials_missing_fields_reshows_form(monkeypatch):
+    monkeypatch.setattr(config_server.config, "save",   lambda d: None)
+    monkeypatch.setattr(config_server.config, "reload", lambda: None)
+    server = _make_server()
+    conn = MagicMock()
+    server._dispatch(conn, "POST /spotify/credentials HTTP/1.1\r\n\r\nclient_id=&client_secret=")
+    body = conn.send.call_args[0][0].decode()
+    assert "/spotify/credentials" in body
+
+
+# ── GET /spotify/auth ─────────────────────────────────────────────────────────
+
+def test_get_spotify_auth_redirects_to_spotify(monkeypatch):
+    monkeypatch.setattr(config_server.config, "SPOTIFY_CLIENT_ID", "my_client")
     server = _make_server()
     conn = MagicMock()
     server._dispatch(conn, "GET /spotify/auth HTTP/1.1\r\n\r\n")
-    conn.send.assert_called_once()
+    response = conn.send.call_args[0][0].decode()
+    assert "302" in response
+    assert "accounts.spotify.com/authorize" in response
+    assert "my_client" in response
+
+
+def test_get_spotify_auth_no_client_id_shows_creds_form(monkeypatch):
+    monkeypatch.setattr(config_server.config, "SPOTIFY_CLIENT_ID", "")
+    server = _make_server()
+    conn = MagicMock()
+    server._dispatch(conn, "GET /spotify/auth HTTP/1.1\r\n\r\n")
     body = conn.send.call_args[0][0].decode()
-    assert "200" in body
+    assert "/spotify/credentials" in body
 
 
-def test_get_spotify_callback_returns_stub():
+# ── GET /callback ─────────────────────────────────────────────────────────────
+
+def test_callback_success_saves_token_and_sets_done(monkeypatch):
+    saved = {}
+    monkeypatch.setattr(config_server.config, "SPOTIFY_CLIENT_ID",     "cid")
+    monkeypatch.setattr(config_server.config, "SPOTIFY_CLIENT_SECRET", "csec")
+    monkeypatch.setattr(config_server.config, "save",   lambda d: saved.update(d))
+    monkeypatch.setattr(config_server.config, "reload", lambda: None)
+    monkeypatch.setattr(config_server.spotify, "exchange_code",
+                        lambda cid, csec, code: ("acc", "ref_tok", 3600))
+    server = _make_server()
+    conn = MagicMock()
+    server._dispatch(conn, "GET /callback?code=AUTHCODE HTTP/1.1\r\n\r\n")
+    assert saved.get("spotify_refresh_token") == "ref_tok"
+    assert server.done
+
+
+def test_callback_error_param_shows_error_page(monkeypatch):
+    server = _make_server()
+    conn = MagicMock()
+    server._dispatch(conn, "GET /callback?error=access_denied HTTP/1.1\r\n\r\n")
+    body = conn.send.call_args[0][0].decode()
+    assert "fail" in body.lower() or "denied" in body.lower() or "error" in body.lower()
+    assert not server.done
+
+
+def test_callback_no_code_shows_error_page(monkeypatch):
+    server = _make_server()
+    conn = MagicMock()
+    server._dispatch(conn, "GET /callback HTTP/1.1\r\n\r\n")
+    body = conn.send.call_args[0][0].decode()
+    assert "fail" in body.lower() or "error" in body.lower()
+    assert not server.done
+
+
+def test_callback_exchange_fails_shows_error_page(monkeypatch):
+    monkeypatch.setattr(config_server.config, "SPOTIFY_CLIENT_ID",     "cid")
+    monkeypatch.setattr(config_server.config, "SPOTIFY_CLIENT_SECRET", "csec")
+    monkeypatch.setattr(config_server.spotify, "exchange_code",
+                        lambda cid, csec, code: (None, None, 0))
+    server = _make_server()
+    conn = MagicMock()
+    server._dispatch(conn, "GET /callback?code=BADCODE HTTP/1.1\r\n\r\n")
+    body = conn.send.call_args[0][0].decode()
+    assert "fail" in body.lower() or "error" in body.lower()
+    assert not server.done
+
+
+# ── /spotify/callback route removed — now 404 ────────────────────────────────
+
+def test_old_spotify_callback_route_is_404():
     server = _make_server()
     conn = MagicMock()
     server._dispatch(conn, "GET /spotify/callback HTTP/1.1\r\n\r\n")
-    conn.send.assert_called_once()
     body = conn.send.call_args[0][0].decode()
-    assert "200" in body
+    assert "404" in body
 
 
 # ── Unknown route ────────────────────────────────────────────────────────────

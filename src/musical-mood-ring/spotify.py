@@ -24,6 +24,51 @@ except ImportError:
 
 _RECENTLY_PLAYED_URL = "https://api.spotify.com/v1/me/player/recently-played"
 _TOKEN_URL           = "https://accounts.spotify.com/api/token"
+_AUTH_URL            = "https://accounts.spotify.com/authorize"
+_REDIRECT_URI        = "http://musical-mood-ring.local/callback"
+_REDIRECT_URI_ENC    = "http%3A%2F%2Fmusical-mood-ring.local%2Fcallback"
+_SCOPE               = "user-read-recently-played"
+
+
+def auth_url(client_id):
+    """
+    Build the Spotify Authorization Code Flow URL.
+    Redirect the user's browser here to grant permission.
+    """
+    return (
+        _AUTH_URL
+        + "?client_id="      + client_id
+        + "&response_type=code"
+        + "&redirect_uri="   + _REDIRECT_URI_ENC
+        + "&scope="          + _SCOPE
+    )
+
+
+def exchange_code(client_id, client_secret, code):
+    """
+    Exchange an authorization code for tokens (Authorization Code Flow).
+    Returns (access_token, refresh_token, expires_in) or (None, None, 0) on failure.
+    """
+    try:
+        credentials = _b64encode(client_id + ":" + client_secret)
+        resp = requests.post(
+            _TOKEN_URL,
+            headers={
+                "Authorization": "Basic " + credentials,
+                "Content-Type":  "application/x-www-form-urlencoded",
+            },
+            data=(
+                "grant_type=authorization_code"
+                "&code=" + code
+                + "&redirect_uri=" + _REDIRECT_URI_ENC
+            ),
+        )
+        if resp.status_code != 200:
+            return None, None, 0
+        body = resp.json()
+        return body.get("access_token"), body.get("refresh_token"), body.get("expires_in", 3600)
+    except Exception:
+        return None, None, 0
 
 
 def recently_played(access_token, limit=10):
