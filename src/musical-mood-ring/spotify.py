@@ -75,7 +75,8 @@ def exchange_code(client_id, client_secret, code):
 def recently_played(access_token, limit=10):
     """
     Fetch recently-played tracks.
-    Returns a list of Spotify track IDs (strings), most recent first.
+    Returns a list of (track_id, artist_id) tuples, most recent first.
+    artist_id is the primary (first-listed) artist on the track.
     Returns [] when the user has no recent plays (successful empty response).
     Returns None on any network or API error — caller should call poller.on_error().
     """
@@ -87,7 +88,10 @@ def recently_played(access_token, limit=10):
         if resp.status_code != 200:
             return None
         body = resp.json()
-        return [item["track"]["id"] for item in body.get("items", [])]
+        return [
+            (item["track"]["id"], item["track"]["artists"][0]["id"])
+            for item in body.get("items", [])
+        ]
     except Exception:
         return None
 

@@ -3,7 +3,17 @@
 # Mood engine for musical-mood-ring.
 #
 # Orchestrates the full pipeline each poll cycle:
-#   recently-played track IDs → MMAR lookup → EWMA update → RGB per pixel
+#   (track_id, artist_id) pairs → two-tier MMAR lookup → EWMA update → RGB per pixel
+#
+# Lookup tiers:
+#   1. Track bundle  (precise, from AcousticBrainz/Last.fm pipeline)
+#   2. Artist bundle (approximate, artist-average v/e — optional)
+#   Miss logged to miss_log for pipeline feedback regardless of tier reached.
+#
+# Confidence scalar (applied to saturation at display time):
+#   Track hit  → 1.0  (vivid — device is certain)
+#   Artist hit → decays max(0.6, ×0.95) — washed, arrests at 0.6
+#   Full miss  → ×0.85 — fades toward greyscale
 #
 # Returns three (r, g, b) tuples ready for pixel.py, following the pixel
 # state machine from DESIGN.md §6:
@@ -15,15 +25,15 @@
 #   1 hr – 4 hr data   │ recent     │ 1h avg     │ 1h avg
 #   > 4 hr data        │ recent     │ 1h avg     │ 4h avg
 #
-# Transitions are gated on the count of polls that returned ≥1 bundle hit,
-# so the EWMA windows fill up gradually without any timing hardware.
+# Transitions are gated on the count of track-bundle hit polls only.
 #
 # Pure Python — no hardware dependencies.
 
 import synaesthesia
+import miss_log
 from mmar  import MMARBundle
 from ewma  import EWMA
-from color import mood_to_rgb
+from color import mood_to_rgb, apply_confidence
 
 # Poll thresholds for state transitions (at the default 3-minute poll interval)
 _POLLS_1H = 20   # 60 min / 3 min
@@ -34,38 +44,56 @@ class MoodEngine:
     """
     Stateful mood engine. Construct once at startup; call update() each poll.
 
-    bundle:  MMARBundle loaded by the caller — decouples file I/O from logic,
-             which makes testing straightforward without touching the filesystem.
+    bundle:        MMARBundle (track-level, required)
+    artist_bundle: MMARBundle (artist-level, optional) — approximate fallback
     """
 
-    def __init__(self, bundle):
+    def __init__(self, bundle, artist_bundle=None):
         self._bundle         = bundle
+        self._artist_bundle  = artist_bundle
         self._ewma_1h        = EWMA(synaesthesia.ewma_alpha("1h"))
         self._ewma_4h        = EWMA(synaesthesia.ewma_alpha("4h"))
-        self._now_ve         = None   # most recent known (v, e) for pixel 0
-        self._hit_poll_count = 0      # polls that returned ≥1 bundle hit
+        self._now_ve         = None   # most recent track-bundle (v, e) for pixel 0
+        self._hit_poll_count = 0      # polls with ≥1 track-bundle hit
+        self._confidence     = 1.0   # saturation scalar; decays on artist/miss polls
 
-    def update(self, track_ids):
+    def update(self, track_pairs):
         """
-        Process a list of recently-played Spotify track IDs (newest first).
+        Process a list of (track_id, artist_id) tuples (newest first).
 
-        Looks up each ID in the MMAR bundle. All hits are fed into the EWMA
-        accumulators oldest-to-newest. The newest hit becomes the "now" mood
-        for pixel 0 and is remembered across polls so the pixel doesn't flicker
-        back to neutral on a miss poll.
+        Track-bundle hits update _now_ve, _hit_poll_count, and both EWMAs.
+        Artist-bundle hits feed only the EWMAs (coarser signal; no _now_ve update).
+        Both artist hits and full misses are appended to miss_log.
 
         Returns a 3-tuple of (r, g, b) for [pixel_0, pixel_1, pixel_2].
         """
-        hits = []
-        for tid in track_ids:
-            result = self._bundle.lookup(tid)
-            if result is not None:
-                hits.append(result)
+        track_hits  = []   # precise (v, e) from track bundle
+        artist_hits = []   # approximate (v, e) from artist bundle
 
-        if hits:
-            self._now_ve = hits[0]    # most recently played known track
+        for track_id, artist_id in track_pairs:
+            result = self._bundle.lookup(track_id)
+            if result is not None:
+                track_hits.append(result)
+                self._confidence = 1.0
+            else:
+                miss_log.append(track_id)
+                if self._artist_bundle is not None:
+                    result = self._artist_bundle.lookup(artist_id)
+                if result is not None:
+                    artist_hits.append(result)
+                    self._confidence = max(0.6, self._confidence * 0.95)
+                else:
+                    self._confidence *= 0.85
+
+        if track_hits:
+            self._now_ve = track_hits[0]    # most recently played known track
             self._hit_poll_count += 1
-            for v, e in reversed(hits):   # feed EWMA oldest → newest
+            for v, e in reversed(track_hits):
+                self._ewma_1h.update(v, e)
+                self._ewma_4h.update(v, e)
+
+        if artist_hits:
+            for v, e in reversed(artist_hits):
                 self._ewma_1h.update(v, e)
                 self._ewma_4h.update(v, e)
 
@@ -75,25 +103,24 @@ class MoodEngine:
         n = self._hit_poll_count
 
         if n == 0:
-            # Inactive — no bundle hits yet. Placeholder for idle sparkle (#36).
+            # Inactive — no track-bundle hits yet.
             idle = mood_to_rgb(0.5, synaesthesia.brightness_floor() /
                                (synaesthesia.brightness_floor() + synaesthesia.brightness_range()))
+            idle = apply_confidence(idle, self._confidence)
             return (idle, idle, idle)
 
-        now = mood_to_rgb(*self._now_ve)
+        now = apply_confidence(mood_to_rgb(*self._now_ve), self._confidence)
 
         if n <= _POLLS_1H:
-            # < 1 hr: all three share the most recent track
             return (now, now, now)
 
-        h1 = mood_to_rgb(*self._ewma_1h.value)
+        h1 = apply_confidence(mood_to_rgb(*self._ewma_1h.value), self._confidence)
 
         if n <= _POLLS_4H:
-            # 1–4 hr: pixel 2 follows pixel 1 until the 4h window fills
             return (now, h1, h1)
 
-        # > 4 hr: full three-window discrimination
-        return (now, h1, mood_to_rgb(*self._ewma_4h.value))
+        h4 = apply_confidence(mood_to_rgb(*self._ewma_4h.value), self._confidence)
+        return (now, h1, h4)
 
     def reset(self):
         """Reset all state. Called on bundle reload or sign-out."""
@@ -101,3 +128,4 @@ class MoodEngine:
         self._ewma_4h.reset()
         self._now_ve         = None
         self._hit_poll_count = 0
+        self._confidence     = 1.0

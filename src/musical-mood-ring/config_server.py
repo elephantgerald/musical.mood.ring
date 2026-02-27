@@ -15,6 +15,10 @@
 #     GET  /spotify/auth          → 302 redirect to Spotify authorization URL
 #     GET  /callback              → exchange code, save refresh token, done
 #
+#   Utility endpoints (always available in main loop):
+#     GET  /misses                → plain-text list of unrecognised track IDs
+#                                   (one per line; pipe into cultivator pipeline)
+#
 # The server sets done=True when setup is complete or the 5-min timer fires.
 # Caller drives the loop: while not server.done: server.step(); animate; sleep
 
@@ -28,6 +32,7 @@ except ImportError:
     _HW = False
 
 import config
+import miss_log
 import wifi
 import spotify
 
@@ -189,6 +194,8 @@ class ConfigServer:
             self._handle_spotify_auth(conn)
         elif method == "GET" and path == "/callback":
             self._handle_spotify_callback(conn, _parse_form(query))
+        elif method == "GET" and path == "/misses":
+            self._handle_misses(conn)
         else:
             conn.send(_HTML_404.encode())
 
@@ -264,6 +271,13 @@ class ConfigServer:
         config.save({"spotify_refresh_token": refresh_token})
         config.reload()
         self.done = True  # boot.py exits the loop and falls through to main.py
+
+    def _handle_misses(self, conn):
+        """Return the miss log as plain text (one track ID per line)."""
+        body = "\n".join(miss_log.all())
+        conn.send(
+            ("HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\n" + body).encode()
+        )
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

@@ -14,6 +14,7 @@
 #   IdleSparkle     — per-pixel random cool-white flickers at dim brightness
 #   MoodTransition  — smooth HSV interpolation between mood colours (~60 s)
 #   ErrorIndicator  — dim red pulse (WiFi lost) or 3 red flashes (auth fail)
+#   ApiErrorBlip    — brief complementary double-flash on transient API error
 
 import math
 
@@ -295,3 +296,49 @@ class BootStatus:
             return out
 
         return [(0, 0, 0)] * 3   # unknown mode — safe default
+
+
+# ── ApiErrorBlip ─────────────────────────────────────────────────────────────
+
+class ApiErrorBlip:
+    """
+    Brief double-flash of the complementary colour on a transient API error.
+
+    Computes the complementary hue of the currently displayed colours, then:
+
+        300 ms on  →  300 ms off  →  300 ms on  →  done=True
+
+    All three pixels show the same complementary colour. Brightness is capped
+    at 50% and floored at 25% so the blip is always visible but never harsh.
+    The caller resumes its normal animator after done=True.
+    """
+
+    _PHASE_MS = 300
+
+    def __init__(self, current_colors):
+        self._comp    = self._complementary(current_colors)
+        self._elapsed = 0
+        self.done     = False
+
+    @staticmethod
+    def _complementary(colors):
+        """Average input pixels, shift hue 180°, enforce visibility."""
+        n = len(colors) or 1
+        r = sum(c[0] for c in colors) // n
+        g = sum(c[1] for c in colors) // n
+        b = sum(c[2] for c in colors) // n
+        h, s, v = _rgb_to_hsv(r, g, b)
+        h = (h + 180.0) % 360.0
+        s = max(s, 0.6)              # ensure visibly saturated
+        v = max(min(v, 0.5), 0.25)  # cap at 50%; floor at 25%
+        return _hsv_to_rgb_int(h, s, v)
+
+    def step(self, dt_ms):
+        self._elapsed += dt_ms
+        if self._elapsed >= self._PHASE_MS * 3:
+            self.done = True
+            return [(0, 0, 0)] * 3
+        phase = self._elapsed // self._PHASE_MS   # 0, 1, or 2
+        if phase == 1:                             # middle: off
+            return [(0, 0, 0)] * 3
+        return [self._comp] * 3

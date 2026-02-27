@@ -1,6 +1,7 @@
 import pytest
 from lights import (
     StartupFlare, IdleSparkle, MoodTransition, ErrorIndicator, BootStatus,
+    ApiErrorBlip,
     _rgb_to_hsv, _hsv_to_rgb_int, _lerp_hue,
     _IDLE_OFF, _IDLE_PEAK,
 )
@@ -382,3 +383,109 @@ def test_boot_status_channels_in_range():
                 assert 0 <= r <= 255
                 assert 0 <= g <= 255
                 assert 0 <= bv <= 255
+
+
+# ── ApiErrorBlip ─────────────────────────────────────────────────────────────
+
+_RED   = [(200, 10, 10)] * 3
+_BLACK = [(0, 0, 0)] * 3
+_DIM   = [(6, 7, 10)] * 3    # idle-sparkle level — nearly invisible
+
+
+def test_blip_first_phase_shows_complementary():
+    """Phase 0 (0–299 ms): complementary colour is lit."""
+    blip = ApiErrorBlip(_RED)
+    out  = blip.step(0)
+    assert all(rgb == out[0] for rgb in out), "all pixels must match"
+    assert out[0] != (0, 0, 0), "phase 0 must not be black"
+    assert not blip.done
+
+
+def test_blip_middle_phase_shows_black():
+    """Phase 1 (300–599 ms): all pixels off."""
+    blip = ApiErrorBlip(_RED)
+    blip.step(300)
+    out = blip.step(0)
+    assert all(rgb == (0, 0, 0) for rgb in out), "phase 1 must be black"
+    assert not blip.done
+
+
+def test_blip_second_on_phase_shows_complementary():
+    """Phase 2 (600–899 ms): complementary colour lit again."""
+    blip = ApiErrorBlip(_RED)
+    comp = blip.step(0)[0]   # capture the complementary colour
+    blip.step(600)
+    out = blip.step(0)
+    assert all(rgb == comp for rgb in out), "phase 2 must show complementary"
+    assert not blip.done
+
+
+def test_blip_done_after_900ms():
+    blip = ApiErrorBlip(_RED)
+    blip.step(900)
+    assert blip.done
+
+
+def test_blip_not_done_at_899ms():
+    blip = ApiErrorBlip(_RED)
+    blip.step(899)
+    assert not blip.done
+
+
+def test_blip_outputs_black_when_done():
+    blip = ApiErrorBlip(_RED)
+    blip.step(900)
+    assert blip.done
+    out = blip.step(0)
+    assert all(rgb == (0, 0, 0) for rgb in out)
+
+
+def test_blip_complementary_of_red_is_cyan():
+    """Red input → hue shifts 180° to cyan territory."""
+    blip = ApiErrorBlip(_RED)
+    comp = blip.step(0)[0]
+    h, s, v = _rgb_to_hsv(*comp)
+    # Cyan lives around 180°; allow ±30° tolerance
+    assert 150 <= h <= 210, f"expected cyan hue (~180°), got {h:.1f}°"
+
+
+def test_blip_visible_from_black_input():
+    """Even from a fully dark display the blip must be visibly bright."""
+    blip = ApiErrorBlip(_BLACK)
+    out  = blip.step(0)
+    for r, g, b in out:
+        assert max(r, g, b) >= 50, "blip must be visible even from black input"
+
+
+def test_blip_visible_from_dim_idle():
+    """Blip from idle-sparkle level colours must also be visible."""
+    blip = ApiErrorBlip(_DIM)
+    out  = blip.step(0)
+    for r, g, b in out:
+        assert max(r, g, b) >= 50
+
+
+def test_blip_brightness_ceiling():
+    """Complementary colour must not exceed 50% brightness (channel ≤ 128)."""
+    for colors in [_RED, _BLACK, _DIM, [(255, 255, 255)] * 3]:
+        blip = ApiErrorBlip(colors)
+        for _ in range(10):
+            for r, g, b in blip.step(100):
+                assert r <= 128, f"r={r} exceeds ceiling"
+                assert g <= 128, f"g={g} exceeds ceiling"
+                assert b <= 128, f"b={b} exceeds ceiling"
+
+
+def test_blip_output_length():
+    blip = ApiErrorBlip(_RED)
+    for dt in [0, 300, 600, 900]:
+        assert len(blip.step(dt)) == 3
+
+
+def test_blip_channels_in_range():
+    blip = ApiErrorBlip(_RED)
+    for dt in [0, 150, 300, 450, 600, 750]:
+        for r, g, b in blip.step(dt):
+            assert 0 <= r <= 255
+            assert 0 <= g <= 255
+            assert 0 <= b <= 255

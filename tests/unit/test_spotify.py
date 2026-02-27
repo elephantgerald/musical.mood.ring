@@ -7,6 +7,10 @@ from spotify import recently_played, refresh_token
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+def _item(track_id, artist_id="artist_default"):
+    return {"track": {"id": track_id, "artists": [{"id": artist_id}]}}
+
+
 def _get_resp(status, items=None):
     resp = MagicMock()
     resp.status_code = status
@@ -23,14 +27,11 @@ def _post_resp(status, body=None):
 
 # ── recently_played() ────────────────────────────────────────────────────────
 
-def test_recently_played_returns_track_ids(monkeypatch):
-    items = [
-        {"track": {"id": "abc123"}},
-        {"track": {"id": "def456"}},
-    ]
+def test_recently_played_returns_track_artist_pairs(monkeypatch):
+    items = [_item("abc123", "artist1"), _item("def456", "artist2")]
     monkeypatch.setattr(spotify.requests, "get", lambda *a, **kw: _get_resp(200, items))
     result = recently_played("token")
-    assert result == ["abc123", "def456"]
+    assert result == [("abc123", "artist1"), ("def456", "artist2")]
 
 
 def test_recently_played_empty_items_returns_empty_list(monkeypatch):
@@ -87,10 +88,18 @@ def test_recently_played_limit_in_url(monkeypatch):
 
 
 def test_recently_played_ids_are_strings(monkeypatch):
-    items = [{"track": {"id": "id1"}}, {"track": {"id": "id2"}}]
+    items = [_item("id1", "a1"), _item("id2", "a2")]
     monkeypatch.setattr(spotify.requests, "get", lambda *a, **kw: _get_resp(200, items))
     result = recently_played("tok")
-    assert all(isinstance(tid, str) for tid in result)
+    assert all(isinstance(tid, str) and isinstance(aid, str) for tid, aid in result)
+
+
+def test_recently_played_uses_primary_artist(monkeypatch):
+    """Only artists[0].id must be returned regardless of how many artists are listed."""
+    items = [{"track": {"id": "t1", "artists": [{"id": "primary"}, {"id": "featured"}]}}]
+    monkeypatch.setattr(spotify.requests, "get", lambda *a, **kw: _get_resp(200, items))
+    result = recently_played("tok")
+    assert result == [("t1", "primary")]
 
 
 # ── refresh_token() ───────────────────────────────────────────────────────────

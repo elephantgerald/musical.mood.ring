@@ -34,10 +34,11 @@ import wifi
 from mmar        import load as mmar_load
 from mood_engine import MoodEngine
 from poller      import Poller
-from lights      import StartupFlare, IdleSparkle, MoodTransition, ErrorIndicator
+from lights      import StartupFlare, IdleSparkle, MoodTransition, ErrorIndicator, ApiErrorBlip
 
-FRAME_MS    = 100          # ~10 fps animation update rate
-BUNDLE_PATH = "memory-bundle.bin"
+FRAME_MS          = 100   # ~10 fps animation update rate
+BUNDLE_PATH       = "memory-bundle.bin"
+ARTIST_BUNDLE_PATH = "artist-bundle.bin"
 
 try:
     import utime
@@ -67,7 +68,13 @@ def main():
         pixel.write([(0, 8, 8)] * 3)   # dim teal: bundle missing
         return
 
-    engine       = MoodEngine(bundle)
+    artist_bundle = None
+    try:
+        artist_bundle = mmar_load(ARTIST_BUNDLE_PATH)
+    except OSError:
+        pass   # artist bundle is optional — device works without it
+
+    engine       = MoodEngine(bundle, artist_bundle)
     poller       = Poller()
     access_token = None
     expires_at   = 0
@@ -76,6 +83,8 @@ def main():
     animator     = IdleSparkle()
     in_idle      = True    # True while we've never had a mood hit this session
     error_mode   = None    # None | "wifi_lost" | "auth_fail"
+    _blip        = None    # short complementary double-flash overlay
+    _last_colors = [(0, 0, 0)] * 3
 
     _reconnect_at = 0      # timestamp for next WiFi reconnect attempt
     _loop_count   = 0
@@ -135,6 +144,8 @@ def main():
                 if track_ids is None:
                     # Network or API error
                     poller.on_error(now_ms)
+                    if _blip is None:
+                        _blip = ApiErrorBlip(_last_colors)
                 else:
                     new_colors = engine.update(track_ids)
                     poller.on_success(now_ms)
@@ -168,6 +179,13 @@ def main():
 
         # ── Advance animation and write pixels ────────────────────────────
         colors = animator.step(dt_ms)
+        if _blip is not None:
+            blip_out = _blip.step(dt_ms)
+            if _blip.done:
+                _blip = None
+            else:
+                colors = blip_out
+        _last_colors = colors
         pixel.write(colors)
 
         _sleep_ms(FRAME_MS)

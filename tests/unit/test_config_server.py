@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 import config_server
+import miss_log
 from config_server import ConfigServer, _parse_form, _urldecode, _extract_body
 
 
@@ -351,3 +352,39 @@ def test_extract_body_lf_only():
 def test_extract_body_no_separator():
     raw = "no headers here"
     assert _extract_body(raw) == ""
+
+
+# ── GET /misses ───────────────────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def _tmp_miss_log(tmp_path, monkeypatch):
+    monkeypatch.setattr(miss_log, "_PATH", str(tmp_path / "misses.txt"))
+
+
+def test_get_misses_returns_200():
+    server = _make_server()
+    conn   = MagicMock()
+    server._dispatch(conn, "GET /misses HTTP/1.1\r\n\r\n")
+    body = conn.send.call_args[0][0].decode()
+    assert "200" in body
+
+
+def test_get_misses_returns_track_ids():
+    miss_log.append("id_abc")
+    miss_log.append("id_def")
+    server = _make_server()
+    conn   = MagicMock()
+    server._dispatch(conn, "GET /misses HTTP/1.1\r\n\r\n")
+    body = conn.send.call_args[0][0].decode()
+    assert "id_abc" in body
+    assert "id_def" in body
+
+
+def test_get_misses_empty_log_returns_empty_body():
+    server = _make_server()
+    conn   = MagicMock()
+    server._dispatch(conn, "GET /misses HTTP/1.1\r\n\r\n")
+    # Split on header/body separator
+    raw  = conn.send.call_args[0][0].decode()
+    body = raw.split("\r\n\r\n", 1)[-1]
+    assert body == ""

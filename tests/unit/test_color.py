@@ -1,5 +1,7 @@
 import pytest
-from color import mood_to_rgb
+from color import mood_to_rgb, apply_confidence
+
+_RED = (200, 30, 30)   # a clearly saturated colour for confidence tests
 
 
 def test_returns_three_ints():
@@ -47,3 +49,49 @@ def test_saturation_increases_with_r():
     chroma_near = max(near) - min(near)
     chroma_far  = max(far)  - min(far)
     assert chroma_far > chroma_near
+
+
+# ── apply_confidence ────────────────────────────────────────────────────────
+
+def test_apply_confidence_identity():
+    """confidence=1.0 must return the original colour unchanged."""
+    assert apply_confidence(_RED, 1.0) == _RED
+
+
+def test_apply_confidence_zero_gives_greyscale():
+    """confidence=0.0 must desaturate fully: r == g == b."""
+    r, g, b = apply_confidence(_RED, 0.0)
+    assert r == g == b
+
+
+def test_apply_confidence_half_reduces_chroma():
+    """confidence=0.5 must reduce chroma relative to 1.0."""
+    full = apply_confidence(_RED, 1.0)
+    half = apply_confidence(_RED, 0.5)
+    chroma_full = max(full) - min(full)
+    chroma_half = max(half) - min(half)
+    assert chroma_half < chroma_full
+
+
+def test_apply_confidence_preserves_brightness():
+    """Max channel (brightness proxy) should be unchanged by confidence scaling."""
+    assert max(apply_confidence(_RED, 1.0)) == max(apply_confidence(_RED, 0.0))
+
+
+def test_apply_confidence_black_stays_black():
+    assert apply_confidence((0, 0, 0), 0.5) == (0, 0, 0)
+
+
+def test_apply_confidence_output_in_range():
+    for conf in [0.0, 0.3, 0.6, 1.0]:
+        r, g, b = apply_confidence(_RED, conf)
+        assert 0 <= r <= 255
+        assert 0 <= g <= 255
+        assert 0 <= b <= 255
+
+
+def test_apply_confidence_returns_tuple_of_three_ints():
+    result = apply_confidence(_RED, 0.7)
+    assert len(result) == 3
+    for ch in result:
+        assert isinstance(ch, int)
