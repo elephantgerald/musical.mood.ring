@@ -6,7 +6,8 @@
 # On MicroPython: uses urequests (bundled) and ubinascii (for base64).
 # On CPython (tests/PC): uses standard requests and base64.
 #
-# Implementation stubs — full implementation in M3 (OAuth) and M4 (polling).
+# Fully implemented: auth_url / exchange_code (M3), recently_played /
+# refresh_token (M4).
 
 try:
     import urequests as requests
@@ -75,7 +76,8 @@ def recently_played(access_token, limit=10):
     """
     Fetch recently-played tracks.
     Returns a list of Spotify track IDs (strings), most recent first.
-    Returns [] on any error.
+    Returns [] when the user has no recent plays (successful empty response).
+    Returns None on any network or API error — caller should call poller.on_error().
     """
     try:
         resp = requests.get(
@@ -83,19 +85,17 @@ def recently_played(access_token, limit=10):
             headers={"Authorization": "Bearer " + access_token},
         )
         if resp.status_code != 200:
-            return []
+            return None
         body = resp.json()
         return [item["track"]["id"] for item in body.get("items", [])]
     except Exception:
-        return []
+        return None
 
 
 def refresh_token(client_id, client_secret, refresh_tok):
     """
     Exchange a refresh token for a new access token.
     Returns (access_token, expires_in_seconds) or (None, 0) on failure.
-
-    TODO (M3): implement and test against real Spotify token endpoint.
     """
     try:
         credentials = _b64encode(client_id + ":" + client_secret)

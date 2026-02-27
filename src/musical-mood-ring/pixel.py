@@ -25,12 +25,13 @@ def write(colors):
     """
     Write three (r, g, b) tuples to the NeoPixels.
     colors: iterable of 3 (r, g, b) tuples, each channel 0–255.
+    Channels are clamped to [0, 255] before writing.
     No-ops silently when hardware is unavailable.
     """
     if not _HW:
         return
-    for i, rgb in enumerate(colors):
-        _np[i] = rgb
+    for i, (r, g, b) in enumerate(colors):
+        _np[i] = (max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)))
     _np.write()
 
 

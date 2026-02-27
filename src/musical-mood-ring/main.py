@@ -22,8 +22,10 @@
 #       ↑  new target each poll while music plays
 #
 # Error overlays (exit back to idle sparkle when condition clears):
-#   wifi_lost  — slow dim red pulse
+#   wifi_lost  — slow dim red pulse + active reconnect every 60 s
 #   auth_fail  — 3 red flashes, then idle sparkle
+
+import gc
 
 import config
 import pixel
@@ -39,12 +41,22 @@ BUNDLE_PATH = "memory-bundle.bin"
 
 try:
     import utime
-    def _now_ms(): return utime.ticks_ms()
+    def _now_ms():    return utime.ticks_ms()
     def _sleep_ms(ms): utime.sleep_ms(ms)
 except ImportError:
     import time
-    def _now_ms(): return int(time.time() * 1000)
+    def _now_ms():    return int(time.time() * 1000)
     def _sleep_ms(ms): time.sleep(ms / 1000)
+
+try:
+    import machine as _machine
+    _HW = True
+except ImportError:
+    _machine = None
+    _HW = False
+
+_RECONNECT_INTERVAL_MS = 60_000   # retry WiFi connect every 60 s when lost
+_GC_INTERVAL           = 10       # call gc.collect() every N loop iterations
 
 
 def main():
@@ -65,6 +77,12 @@ def main():
     in_idle      = True    # True while we've never had a mood hit this session
     error_mode   = None    # None | "wifi_lost" | "auth_fail"
 
+    _reconnect_at = 0      # timestamp for next WiFi reconnect attempt
+    _loop_count   = 0
+
+    # Watchdog: reboots the device if the loop stalls for > 8 s
+    _wdt = _machine.WDT(timeout=8000) if _HW else None
+
     prev_ms = _now_ms()
     pixel.write([(0, 16, 0)] * 3)   # dim green: ready
 
@@ -73,18 +91,29 @@ def main():
         dt_ms  = max(0, now_ms - prev_ms)
         prev_ms = now_ms
 
-        # ── WiFi watchdog ───────────────────────────────────────────────
+        # ── Housekeeping ─────────────────────────────────────────────────
+        if _wdt:
+            _wdt.feed()
+        _loop_count += 1
+        if _loop_count % _GC_INTERVAL == 0:
+            gc.collect()
+
+        # ── WiFi watchdog ─────────────────────────────────────────────────
         if not wifi.is_connected():
             if error_mode != ErrorIndicator.WIFI_LOST:
-                animator   = ErrorIndicator(ErrorIndicator.WIFI_LOST)
-                error_mode = ErrorIndicator.WIFI_LOST
+                animator      = ErrorIndicator(ErrorIndicator.WIFI_LOST)
+                error_mode    = ErrorIndicator.WIFI_LOST
+                _reconnect_at = now_ms   # attempt reconnect immediately
+            if now_ms >= _reconnect_at:
+                wifi.connect(config.WIFI_SSID, config.WIFI_PASSWORD, timeout_ms=5000)
+                _reconnect_at = now_ms + _RECONNECT_INTERVAL_MS
         elif error_mode == ErrorIndicator.WIFI_LOST:
             # WiFi recovered — return to idle sparkle
             animator   = IdleSparkle()
             error_mode = None
             in_idle    = True
 
-        # ── Poll ────────────────────────────────────────────────────────
+        # ── Poll ──────────────────────────────────────────────────────────
         if error_mode is None and poller.should_poll(now_ms):
             # Refresh access token when absent or near expiry
             if access_token is None or now_ms >= expires_at:
@@ -104,7 +133,7 @@ def main():
             if access_token and error_mode is None:
                 track_ids = spotify.recently_played(access_token)
                 if track_ids is None:
-                    # Network/API error
+                    # Network or API error
                     poller.on_error(now_ms)
                 else:
                     new_colors = engine.update(track_ids)
@@ -125,23 +154,27 @@ def main():
                         elif isinstance(animator, MoodTransition):
                             animator.update_target(new_colors)
 
-        # ── Auth-fail overlay: dismiss when done ────────────────────────
+        # ── Auth-fail overlay: dismiss when done ──────────────────────────
         if (error_mode == ErrorIndicator.AUTH_FAIL
                 and isinstance(animator, ErrorIndicator)
                 and animator.done):
             animator   = IdleSparkle()
             error_mode = None
 
-        # ── Handoff: startup flare → mood transition ────────────────────
+        # ── Handoff: startup flare → mood transition ──────────────────────
         if isinstance(animator, StartupFlare) and animator.done:
-            last = engine.update([])   # get current colors without a poll
+            last = engine.update([])   # get current colours without a poll
             animator = MoodTransition(last, last)
 
-        # ── Advance animation and write pixels ──────────────────────────
+        # ── Advance animation and write pixels ────────────────────────────
         colors = animator.step(dt_ms)
         pixel.write(colors)
 
         _sleep_ms(FRAME_MS)
 
 
-main()
+try:
+    main()
+except Exception:
+    if _HW:
+        _machine.reset()
