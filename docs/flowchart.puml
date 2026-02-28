@@ -24,7 +24,11 @@ if (wifi_ssid in config.json?) then (no — first boot)
     :Enable AP mode (192.168.4.1);
     :Start ConfigServer — serve WiFi form;
     :Start ONE_SHOT Timer(0) → auto-stop at 5 min;
-    :Animate **CONFIG_WAIT** (slow blue pulse);
+    :Animate **CONFIG_WAIT**;
+    note right
+      💡 slow blue pulse
+      (waiting for user)
+    end note
     repeat
       :server.step();
       :pixel.write(animator.step());
@@ -44,13 +48,15 @@ if (wifi_ssid in config.json?) then (no — first boot)
 
 else (yes — normal boot)
 
-  :Animate **CONNECTING** (spinning white);
+  :Animate **CONNECTING**;
+  note right: 💡 spinning white
   :wifi.connect(ssid, password);
 
   if (connected?) then (yes)
 
     :mdns.start() → **musical-mood-ring.local**;
-    :Animate **SUCCESS** (brief green flash);
+    :Animate **SUCCESS**;
+    note right: 💡 brief green flash
 
     if (spotify_refresh_token in config.json?) then (no)
 
@@ -58,6 +64,10 @@ else (yes — normal boot)
         :Start ConfigServer — serve Spotify pages;
         :Start ONE_SHOT Timer(0) → auto-stop at 5 min;
         :Animate **CONFIG_WAIT**;
+        note right
+          💡 slow blue pulse
+          (waiting for user)
+        end note
         repeat
           :server.step();
           :pixel.write(animator.step());
@@ -77,7 +87,8 @@ else (yes — normal boot)
   else (no — WiFi failed)
 
     repeat
-      :Animate **WIFI_LOST** (dim red pulse);
+      :Animate **WIFI_LOST**;
+      note right: 💡 slow dim red pulse
       :sleep 50 ms;
     repeat while (never — physical reset required) is (looping)
 
@@ -105,7 +116,7 @@ title musical.mood.ring — Main Loop (main.py)
 start
 
 :Load **memory-bundle.bin** from flash;
-note right: OSError → dim teal pixels + exit
+note right: OSError → 💡 dim teal all pixels + exit
 
 :Load **artist-bundle.bin** (optional);
 note right: missing is fine —\ndevice works without it
@@ -115,6 +126,7 @@ note right: missing is fine —\ndevice works without it
 :animator = **IdleSparkle**;
 :WDT(timeout = 8 s);
 :pixel.write dim green — ready;
+note right: 💡 dim green all pixels
 
 while (main loop — FRAME_MS = 100 ms) is (each frame)
 
@@ -124,7 +136,8 @@ while (main loop — FRAME_MS = 100 ms) is (each frame)
   ' ── WiFi watchdog ───────────────────────────────────────────
   if (wifi.is_connected()?) then (no)
     if (not already WIFI_LOST?) then (yes)
-      :animator = ErrorIndicator.**WIFI_LOST**\n(slow dim red pulse);
+      :animator = ErrorIndicator.**WIFI_LOST**;
+      note right: 💡 slow dim red pulse
       :error_mode = WIFI_LOST;
     endif
     if (reconnect timer due — every 60 s?) then (yes)
@@ -133,6 +146,7 @@ while (main loop — FRAME_MS = 100 ms) is (each frame)
   else (yes)
     if (recovering from WIFI_LOST?) then (yes)
       :animator = **IdleSparkle**;
+      note right: 💡 near-invisible cool-white twinkle
       :error_mode = None; in_idle = True;
     endif
 
@@ -142,7 +156,8 @@ while (main loop — FRAME_MS = 100 ms) is (each frame)
       if (access_token missing or expired?) then (yes)
         :spotify.refresh_token(client_id, secret, refresh_tok);
         if (failed?) then (yes)
-          :ErrorIndicator.**AUTH_FAIL** (3 red flashes);
+          :ErrorIndicator.**AUTH_FAIL**;
+          note right: 💡 3 red flashes\nthen → IdleSparkle
           :error_mode = AUTH_FAIL;
           :poller.on_error();
         else (yes)
@@ -155,7 +170,8 @@ while (main loop — FRAME_MS = 100 ms) is (each frame)
         :spotify.**recently_played**(access_token);
         if (returned None — network/API error?) then (yes)
           :poller.on_error();
-          :_blip = **ApiErrorBlip** (brief overlay flash);
+          :_blip = **ApiErrorBlip**;
+          note right: 💡 brief complementary\nflash overlay
         else (list of (track_id, artist_id))
           :engine.**update**(track_pairs);
           note right
@@ -170,12 +186,15 @@ while (main loop — FRAME_MS = 100 ms) is (each frame)
 
           if (persistent failure?) then (yes)
             :animator = **IdleSparkle**;
+            note right: 💡 near-invisible\ncool-white twinkle
             :in_idle = True;
           elseif (was idle — first hit?) then (yes)
-            :animator = **StartupFlare** (3 s fade-in);
+            :animator = **StartupFlare**;
+            note right: 💡 3 s fade-in\nfrom black → mood color
             :in_idle = False;
           elseif (MoodTransition active?) then (yes)
             :animator.**update_target**(new_colors);
+            note right: 💡 crossfade target\nupdated in place
           endif
         endif
       endif
@@ -186,12 +205,15 @@ while (main loop — FRAME_MS = 100 ms) is (each frame)
   ' ── AUTH_FAIL clears when animation finishes ────────────────
   if (AUTH_FAIL AND ErrorIndicator.done?) then (yes)
     :animator = **IdleSparkle**;
+    note right: 💡 near-invisible\ncool-white twinkle
     :error_mode = None;
   endif
 
   ' ── StartupFlare → MoodTransition handoff ───────────────────
   if (StartupFlare.done?) then (yes)
-    :animator = **MoodTransition** (60 s HSV crossfade);
+    :engine.update([]) — get current colors without a poll;
+    :animator = **MoodTransition**;
+    note right: 💡 60 s smooth HSV\ncrossfade between targets
   endif
 
   ' ── Advance animation ───────────────────────────────────────
