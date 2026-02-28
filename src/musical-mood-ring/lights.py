@@ -97,7 +97,7 @@ class StartupFlare:
 # ── IdleSparkle ────────────────────────────────────────────────────────────
 
 _IDLE_OFF  = (0, 0, 0)
-_IDLE_PEAK = (6, 7, 10)   # cool dim white — ~4% of NeoPixel ceiling
+_IDLE_PEAK = (28, 30, 45)  # cool dim white — visible but dim on WS2812B
 
 
 class IdleSparkle:

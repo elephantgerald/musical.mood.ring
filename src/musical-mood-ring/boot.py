@@ -47,7 +47,7 @@ if not config.WIFI_SSID:
     if _HW:
         def _timeout_cb(t):
             server.stop()
-        _timer = machine.Timer(-1)
+        _timer = machine.Timer(0)
         _timer.init(mode=machine.Timer.ONE_SHOT, period=300_000, callback=_timeout_cb)
 
     while not server.done:
@@ -80,7 +80,7 @@ else:
             if _HW:
                 def _spotify_timeout_cb(t):
                     server.stop()
-                _stimer = machine.Timer(-1)
+                _stimer = machine.Timer(0)
                 _stimer.init(
                     mode=machine.Timer.ONE_SHOT,
                     period=300_000,
