@@ -56,25 +56,66 @@ This is a deliberate constraint. A mood ring that only works when a companion sc
 ### Boot Sequence
 ```
 boot.py
-  ├── Set CPU to 240MHz
-  ├── Connect to WiFi (client mode, if credentials stored)
-  ├── Start AP config server (5-minute window — see §4)
-  └── Start main application loop
+  ├── First-boot (no wifi_ssid in config.json):
+  │     Enable AP (192.168.4.1)
+  │     Start ConfigServer → serve WiFi credentials form
+  │     Start 5-min ONE_SHOT Timer(0) → auto-stop
+  │     Animate BootStatus.CONFIG_WAIT on NeoPixels
+  │     On POST /wifi: validate credentials, save config.json, machine.reset()
+  │
+  └── Normal-boot (wifi_ssid present):
+        Connect to WiFi, animate BootStatus.CONNECTING
+        On success:
+          mdns.start() → musical-mood-ring.local
+          Animate BootStatus.SUCCESS briefly
+          If no spotify_refresh_token in config.json:
+            Start ConfigServer → serve Spotify OAuth pages
+            Start 5-min ONE_SHOT Timer(0) → auto-stop
+            Animate BootStatus.CONFIG_WAIT
+            On GET /callback: exchange code, save refresh_token, config.reload()
+          Fall through → main.py
+        On failure:
+          Pulse ErrorIndicator.WIFI_LOST indefinitely
+```
+
+### Animation State Machine
+```
+main.py
+  idle sparkle  ←  startup / no bundle hits / persistent API failure
+      ↓  first track-bundle hit after idle
+  startup flare  (3 s fade-in from black)
+      ↓  flare complete
+  mood transition  (60 s smooth HSV crossfade to current target)
+      ↑  target updated each successful poll
+
+Error overlays (exit to idle sparkle when condition clears):
+  wifi_lost   — slow dim red pulse; active reconnect attempt every 60 s
+  auth_fail   — 3 red flashes, then idle sparkle
+  api_blip    — brief flash on transient network error; does not interrupt main animator
 ```
 
 ### Source Structure
 ```
 src/musical-mood-ring/
-├── boot.py           # Hardware init, WiFi, config server window
-├── main.py           # Main loop: poll, compute, render
-├── wlan.py           # WiFi client connection
-├── ap.py             # AP mode management
-├── config_serve.py   # Configuration web server (WiFi + Spotify auth)
-├── spotify.py        # Spotify API client (token refresh, polling)
-├── mood.py           # Polar color model and time-window averaging
-├── lights.py         # NeoPixel rendering and animation
-└── config_srv/
-    └── index.html    # Config server UI
+├── boot.py           # Two-branch boot: first-boot AP setup or WiFi + Spotify OAuth
+├── main.py           # Main loop: 10 fps animation state machine + 3-min poll cycle
+├── ap.py             # AP_IF wrapper: allow_configure / disallow_configure
+├── mdns.py           # mDNS: start(hostname) / stop()
+├── wifi.py           # WiFi client: connect / is_connected / try_connect
+├── config.py         # config.json: get / save / reload
+├── config_server.py  # Non-blocking HTTP: WiFi form, Spotify OAuth, GET /misses
+├── spotify.py        # Spotify API: auth_url / exchange_code / recently_played / refresh_token
+├── mmar.py           # MMAR bundle: fnv1a_64 hash + binary search lookup
+├── mood_engine.py    # Two-tier lookup → confidence scalar → EWMA → 3×RGB
+├── color.py          # mood_to_rgb(v, e) → (r, g, b); apply_confidence(rgb, c)
+├── polar.py          # to_polar(v, e) → (r, theta_deg)
+├── ewma.py           # EWMA accumulator; snap-on-first-update; reset()
+├── synaesthesia.py   # Colour profile loader (synaesthesia.json or built-in defaults)
+├── lights.py         # Animators: IdleSparkle, StartupFlare, MoodTransition,
+│                     #            BootStatus, ErrorIndicator, ApiErrorBlip
+├── pixel.py          # NeoPixel WS2812B driver; channel clamping to [0, 255]
+├── poller.py         # Poll timing with exponential back-off
+└── miss_log.py       # Rolling 1000-entry miss log on flash (misses.txt)
 ```
 
 ---
@@ -82,13 +123,11 @@ src/musical-mood-ring/
 ## 4. WiFi and Configuration
 
 ### Pattern
-Inspired by a prior project (dancey.dancey). On every boot:
+Inspired by a prior project (dancey.dancey). Boot branches on whether WiFi credentials are saved:
 
-1. Attempt WiFi client connection if credentials are stored on flash.
-2. Simultaneously bring up an AP-mode configuration server for a fixed window (5 minutes default).
-3. After the window closes, shut down AP and config server automatically via a `Timer.ONE_SHOT` callback.
+**First-boot**: No credentials in config.json. The device opens an AP (`192.168.4.1`) and serves a WiFi credentials form. A 5-minute `Timer.ONE_SHOT` shuts down the server automatically if the user takes too long. On successful credential submission, the device reboots into normal-boot.
 
-Users connect to the AP, open a browser, and reach a configuration page at `192.168.4.1`.
+**Normal-boot**: Credentials present. The device connects as a WiFi client, starts mDNS, and falls through to the main loop. If no Spotify refresh token is saved yet, a second config server window opens (still in STA mode, reachable at `musical-mood-ring.local`) to complete the Spotify OAuth flow before main.py starts. The AP is **not** re-opened on normal boots.
 
 ### Improvements Over dancey.dancey
 
@@ -105,10 +144,7 @@ Users connect to the AP, open a browser, and reach a configuration page at `192.
 **Credential validation before reboot.** WiFi credentials are tested before saving and rebooting, so a typo in the password surfaces immediately rather than after a full reboot cycle.
 
 ### Credential Storage
-Stored as plain files on ESP32 flash (standard MicroPython pattern):
-- `__ssid` — WiFi network name
-- `__password` — WiFi password
-- `__spotify_refresh_token` — Spotify refresh token (long-lived, stored after first OAuth)
+Stored in a single `config.json` file on ESP32 flash. `config.py` exposes module-level constants (`WIFI_SSID`, `WIFI_PASSWORD`, `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_REFRESH_TOKEN`) and a `save()` function that merges updates into the existing file — so WiFi credentials survive a Spotify token write. `reload()` refreshes all constants in place without a reboot.
 
 ---
 
@@ -132,12 +168,15 @@ The Spotify Authorization Code flow is handled during the initial configuration 
 
 ### Polling
 Every 3 minutes, the ESP32:
-1. Refreshes the access token if expired.
-2. Calls `GET /v1/me/player/recently-played?limit=50`.
-3. For each returned track ID, performs a binary search in the on-flash MMAR bundle to retrieve its pre-computed (valence, energy).
-4. Passes the (valence, energy) pairs with timestamps to the mood engine.
+1. Refreshes the access token if expired or absent.
+2. Calls `GET /v1/me/player/recently-played?limit=10`.
+3. For each returned `(track_id, artist_id)` pair, performs a two-tier MMAR lookup:
+   - **Track bundle** (primary): precise (v, e) from the AcousticBrainz/Last.fm pipeline.
+   - **Artist bundle** (fallback, if present on flash): average (v, e) for the primary artist.
+4. Unrecognised track IDs are appended to `misses.txt` (retrievable at `GET /misses`) for pipeline feedback.
+5. Passes results to the mood engine, which updates the EWMA accumulators and returns 3 RGB tuples.
 
-Tracks not found in the bundle are silently skipped; the mood engine continues with the tracks it does have data for. The bundle is updated offline via the M0 pipeline and re-flashed as needed.
+The bundles are compiled offline via the M0 pipeline and re-flashed as needed.
 
 **Note**: `GET /v1/audio-features` is permanently blocked for apps registered after November 2024. Runtime audio feature lookups are not possible; the pre-computed bundle is the only viable path.
 
@@ -164,6 +203,17 @@ r = sqrt(v'² + e'²)   # mood intensity (0 = neutral, ~0.71 = extreme)
 
 - **r** — how strongly you're feeling anything. Small r = mild, ambiguous. Large r = committed emotional state.
 - **θ** — what you're feeling. This determines the hue.
+
+### Confidence Scalar
+A per-session scalar multiplied against saturation communicates lookup certainty:
+
+| Lookup result | Confidence update |
+|---|---|
+| Track hit | `= 1.0` — vivid; device is certain |
+| Artist hit | `= max(0.6, × 0.95)` — washes toward 0.6 over ~10 polls, then arrests |
+| Full miss | `×= 0.85` — decays from wherever toward 0.0 (near-white) |
+
+`confidence = 1.0` is the identity; `confidence = 0.0` gives greyscale. Applied via `apply_confidence(rgb, c)` in `color.py`.
 
 ### Color Function
 Three independent mappings:
@@ -193,17 +243,16 @@ v̄ₙ = α * vₙ + (1 - α) * v̄ₙ₋₁
 α is chosen so that the half-life of each pixel's memory matches its target horizon. No historical data needs to be stored — only the running average.
 
 ### Pixel State Machine
-The system handles sparse early data gracefully:
+The system handles sparse early data gracefully. Transitions are gated on **track-bundle hit polls** only (artist-only and miss polls do not advance the counter):
 
-| Listening History | Pixel 1 | Pixel 2 | Pixel 3 |
+| Track-hit poll count | Pixel 0 | Pixel 1 | Pixel 2 |
 |---|---|---|---|
-| Spotify inactive | idle sparkle | idle sparkle | idle sparkle |
-| < 3 min data | recent (all three share) | recent | recent |
-| 3 min – 1 hr data | recent | recent | recent (P2 and P3 share) |
-| > 1 hr data | recent | 1h average | 1h average (P3 shares P2) |
-| > 4 hr data | recent | 1h average | 4h average |
+| 0 (inactive) | idle sparkle | idle sparkle | idle sparkle |
+| 1 – 20 (< ~1 hr) | recent | recent | recent |
+| 21 – 80 (1 – 4 hr) | recent | 1h EWMA | 1h EWMA |
+| > 80 (> ~4 hr) | recent | 1h EWMA | 4h EWMA |
 
-On first Spotify activity after idle, all three pixels flare to life together and share the recency data until history accumulates enough to discriminate.
+On first Spotify activity after idle, all three pixels flare to life together via `StartupFlare`, then transition to `MoodTransition` once the flare completes.
 
 ---
 

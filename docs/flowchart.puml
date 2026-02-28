@@ -1,0 +1,209 @@
+' musical.mood.ring — System Flowcharts
+' Render with PlantUML: plantuml docs/flowchart.puml
+' Or paste into https://www.plantuml.com/plantuml/uml/
+
+' ─────────────────────────────────────────────────────────────────────────────
+' Diagram 1: Boot Sequence (boot.py)
+' ─────────────────────────────────────────────────────────────────────────────
+
+@startuml Boot Sequence
+
+skinparam ActivityBackgroundColor #f8f8f8
+skinparam ActivityBorderColor #888
+skinparam ArrowColor #555
+skinparam NoteBackgroundColor #fffde7
+skinparam NoteBorderColor #ccc
+
+title musical.mood.ring — Boot Sequence (boot.py)
+
+start
+
+if (wifi_ssid in config.json?) then (no — first boot)
+
+  partition "AP Config Window  [5-minute timeout]" {
+    :Enable AP mode (192.168.4.1);
+    :Start ConfigServer — serve WiFi form;
+    :Start ONE_SHOT Timer(0) → auto-stop at 5 min;
+    :Animate **CONFIG_WAIT** (slow blue pulse);
+    repeat
+      :server.step();
+      :pixel.write(animator.step());
+      :sleep 50 ms;
+    repeat while (credentials submitted?) is (waiting)
+    -> submitted;
+    :wifi.try_connect(ssid, password);
+    if (connects?) then (yes)
+      :config.save(ssid, password);
+      :machine.reset();
+      note right: reboots into\nnormal-boot branch
+    else (no)
+      :Serve error page;
+      note right: user retries\nwithin the window
+    endif
+  }
+
+else (yes — normal boot)
+
+  :Animate **CONNECTING** (spinning white);
+  :wifi.connect(ssid, password);
+
+  if (connected?) then (yes)
+
+    :mdns.start() → **musical-mood-ring.local**;
+    :Animate **SUCCESS** (brief green flash);
+
+    if (spotify_refresh_token in config.json?) then (no)
+
+      partition "Spotify OAuth Window  [5-minute timeout]" {
+        :Start ConfigServer — serve Spotify pages;
+        :Start ONE_SHOT Timer(0) → auto-stop at 5 min;
+        :Animate **CONFIG_WAIT**;
+        repeat
+          :server.step();
+          :pixel.write(animator.step());
+          :sleep 50 ms;
+        repeat while (OAuth complete?) is (waiting)
+        -> authorized;
+        :exchange auth code → access + refresh tokens;
+        :config.save(refresh_token);
+        :config.reload();
+      }
+
+    endif
+
+    :→ **main.py**;
+    stop
+
+  else (no — WiFi failed)
+
+    repeat
+      :Animate **WIFI_LOST** (dim red pulse);
+      :sleep 50 ms;
+    repeat while (never — physical reset required) is (looping)
+
+  endif
+
+endif
+
+@enduml
+
+
+' ─────────────────────────────────────────────────────────────────────────────
+' Diagram 2: Main Loop (main.py)
+' ─────────────────────────────────────────────────────────────────────────────
+
+@startuml Main Loop
+
+skinparam ActivityBackgroundColor #f8f8f8
+skinparam ActivityBorderColor #888
+skinparam ArrowColor #555
+skinparam NoteBackgroundColor #fffde7
+skinparam NoteBorderColor #ccc
+
+title musical.mood.ring — Main Loop (main.py)
+
+start
+
+:Load **memory-bundle.bin** from flash;
+note right: OSError → dim teal pixels + exit
+
+:Load **artist-bundle.bin** (optional);
+note right: missing is fine —\ndevice works without it
+
+:MoodEngine(bundle, artist_bundle);
+:Poller() — 3-min interval with back-off;
+:animator = **IdleSparkle**;
+:WDT(timeout = 8 s);
+:pixel.write dim green — ready;
+
+while (main loop — FRAME_MS = 100 ms) is (each frame)
+
+  :wdt.feed();
+  note right: gc.collect() every 10 iters
+
+  ' ── WiFi watchdog ───────────────────────────────────────────
+  if (wifi.is_connected()?) then (no)
+    if (not already WIFI_LOST?) then (yes)
+      :animator = ErrorIndicator.**WIFI_LOST**\n(slow dim red pulse);
+      :error_mode = WIFI_LOST;
+    endif
+    if (reconnect timer due — every 60 s?) then (yes)
+      :wifi.connect(ssid, pw, timeout=5 s);
+    endif
+  else (yes)
+    if (recovering from WIFI_LOST?) then (yes)
+      :animator = **IdleSparkle**;
+      :error_mode = None; in_idle = True;
+    endif
+
+    ' ── Poll cycle ──────────────────────────────────────────
+    if (error_mode is None\nAND poller.should_poll()?) then (yes)
+
+      if (access_token missing or expired?) then (yes)
+        :spotify.refresh_token(client_id, secret, refresh_tok);
+        if (failed?) then (yes)
+          :ErrorIndicator.**AUTH_FAIL** (3 red flashes);
+          :error_mode = AUTH_FAIL;
+          :poller.on_error();
+        else (yes)
+          :access_token = new token;
+          :expires_at = now + expires_in - 60 s;
+        endif
+      endif
+
+      if (token valid AND no error mode?) then (yes)
+        :spotify.**recently_played**(access_token);
+        if (returned None — network/API error?) then (yes)
+          :poller.on_error();
+          :_blip = **ApiErrorBlip** (brief overlay flash);
+        else (list of (track_id, artist_id))
+          :engine.**update**(track_pairs);
+          note right
+            Per pair:
+            1. Track bundle lookup → v,e (precise)
+            2. Artist bundle lookup → v,e (approx)
+            3. Full miss → confidence decay
+            Miss logged to misses.txt either way.
+            Confidence scalar applied to saturation.
+          end note
+          :poller.on_success();
+
+          if (persistent failure?) then (yes)
+            :animator = **IdleSparkle**;
+            :in_idle = True;
+          elseif (was idle — first hit?) then (yes)
+            :animator = **StartupFlare** (3 s fade-in);
+            :in_idle = False;
+          elseif (MoodTransition active?) then (yes)
+            :animator.**update_target**(new_colors);
+          endif
+        endif
+      endif
+
+    endif
+  endif
+
+  ' ── AUTH_FAIL clears when animation finishes ────────────────
+  if (AUTH_FAIL AND ErrorIndicator.done?) then (yes)
+    :animator = **IdleSparkle**;
+    :error_mode = None;
+  endif
+
+  ' ── StartupFlare → MoodTransition handoff ───────────────────
+  if (StartupFlare.done?) then (yes)
+    :animator = **MoodTransition** (60 s HSV crossfade);
+  endif
+
+  ' ── Advance animation ───────────────────────────────────────
+  :colors = animator.step(dt_ms);
+
+  if (ApiErrorBlip active?) then (yes)
+    :blend blip overlay onto colors;
+  endif
+
+  :pixel.write(colors);
+  :sleep FRAME_MS;
+
+endwhile (never — uncaught exception → machine.reset())
+
+@enduml
