@@ -22,7 +22,7 @@ The three pixels show three different time slices of that mood space:
 | 2 — middle | Exponentially weighted average over the last hour |
 | 3 — rightmost | Exponentially weighted average over the last four hours |
 
-When Spotify has been quiet, all three flicker like a distant candle — a Gaussian noise baseline punctuated by occasional soft swells and rare bright bell-strike peaks. When music starts, they flare to life together and slowly differentiate as history builds up.
+When Spotify has been quiet, all three flicker like a distant candle — an organic noise baseline punctuated by soft swells roughly once a minute, and rare bell-strike peaks that spike bright and ring out over a second or two. When music starts, they flare to life together and slowly differentiate as history builds up.
 
 ### Personalised color mapping
 

@@ -94,7 +94,12 @@ Error overlays (exit to idle sparkle when condition clears):
   api_blip    — brief flash on transient network error; does not interrupt main animator
 ```
 
-**IdleSparkle** is a hybrid candle-flicker animation: Gaussian white noise (Box-Muller) drives the baseline brightness, a sin^6 medium swell adds a ~0.60 peak roughly once per minute, and a bell-strike envelope (instantaneous attack, ~1.5 s exponential decay) fires for the rare ~0.90 peak roughly once per 6 minutes. Each pixel runs an independent noise stream with slightly detuned swell periods. EWMA output smoothing (α=0.15) keeps transitions fluid.
+**IdleSparkle** is a three-layer animation:
+- **Candle flicker baseline** — Gaussian white noise (Box-Muller, μ=0.08, σ=0.06) gives organic, never-repeating texture
+- **Medium swell** — sin^6 half-rectified wave (~67 s period) lifts brightness to ~0.60, roughly once per minute per pixel
+- **Bell-strike peak** — at each ~360 s swell zero-crossing, brightness spikes instantly to ~0.90 then decays exponentially (~1.5 s half-life), like a struck bell ringing out
+
+Each pixel runs an independent noise stream with slightly detuned swell periods so they breathe and ring independently. EWMA output smoothing (α=0.15) keeps frame-to-frame transitions fluid.
 
 ### Source Structure
 ```
