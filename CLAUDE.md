@@ -105,8 +105,10 @@ jupyter notebook src/mood-model/m0_calibration.ipynb
 - `mmar.py` — MMAR binary search; `fnv1a_64` hash; `MMARBundle.lookup(track_id)`
 - `polar.py` — `to_polar(v, e)` → `(r, theta_deg)`
 - `ewma.py` — `EWMA(alpha)` accumulator with snap-on-first-update and `reset()`
-- `color.py` — `mood_to_rgb(v, e)` → `(r, g, b)` via synaesthesia profile; inline HSV→RGB
-- `mood_engine.py` — `MoodEngine(bundle).update(track_ids)` → 3 RGB tuples; now-pixel persistence across miss polls
+- `color.py` — `mood_to_rgb(v, e)` → `(r, g, b)` via synaesthesia profile; `apply_confidence(rgb, c)` scales saturation
+- `mood_engine.py` — `MoodEngine(bundle, artist_bundle).update(track_pairs)` → 3 RGB tuples; two-tier lookup (track → artist fallback); confidence scalar applied to saturation; now-pixel persistence across miss polls
+- `miss_log.py` — rolling 1000-entry miss log on flash (`misses.txt`); `append(track_id)`, `all()`, `clear()`
+- `poller.py` — poll timing with exponential back-off; `should_poll()`, `on_success()`, `on_error()`
 - `synaesthesia.py` — colour profile loader (see below)
 
 **Hardware glue — thin try/except wrappers, no-op in CPython:**
@@ -114,9 +116,9 @@ jupyter notebook src/mood-model/m0_calibration.ipynb
 - `wifi.py` — `connect(ssid, password)`, `is_connected()`, `try_connect(ssid, password)`
 - `ap.py` — `allow_configure()` / `disallow_configure()` (AP_IF wrapper)
 - `mdns.py` — `start(hostname)` / `stop()` (mDNS advertisement)
-- `spotify.py` — `auth_url()`, `exchange_code()`, `recently_played()`, `refresh_token()`
+- `spotify.py` — `auth_url()`, `exchange_code()`, `recently_played()` → `[(track_id, artist_id)]`, `refresh_token()`
 - `config.py` — reads/writes `config.json`; `save(data)` merges, `reload()` refreshes constants
-- `config_server.py` — non-blocking HTTP server; WiFi setup (AP mode) + Spotify OAuth (STA mode)
+- `config_server.py` — non-blocking HTTP server; WiFi setup (AP mode) + Spotify OAuth (STA mode); `GET /misses` endpoint
 - `boot.py` — first-boot AP setup, then normal-boot WiFi connect + Spotify OAuth if needed
 - `main.py` — 3-minute poll loop; WDT, gc, active WiFi reconnect, panic guard
 
@@ -157,7 +159,19 @@ Public API: `hue(theta_deg)`, `saturation_k()`, `brightness_floor()`, `brightnes
 
 **mDNS**: Device advertises as `musical-mood-ring.local`, providing a stable Spotify OAuth redirect URI (`http://musical-mood-ring.local/callback`) regardless of DHCP-assigned IP.
 
-**Deployment**: `mpremote` (not ampy) for flashing files to the ESP32. Use `build/reset.sh` to erase and reflash MicroPython itself.
+**Deployment**: `mpremote` (not ampy) for flashing files to the ESP32. Use `build/reset.sh` to erase and reflash MicroPython itself. Use `build/deploy.sh` to copy firmware and bundles to an already-flashed board:
+
+```bash
+./build/deploy.sh                        # full mood ring firmware + bundles (default)
+./build/deploy.sh --project twinkle      # hardware test: twinkle animation
+./build/deploy.sh --project whitenoise   # hardware test: white noise candle
+./build/deploy.sh --project flicker      # hardware test: candle + bell-strike peaks
+./build/deploy.sh --firmware-only        # mood.ring: .py files only, skip bundles
+./build/deploy.sh --bundles-only         # mood.ring: bundles only, skip .py files
+./build/deploy.sh --no-reset             # skip board reset after copy
+```
+
+If the board is stuck running firmware (WiFi/AP stack active), `reset.sh` must be run first — the serial interrupt cannot break through the network stack.
 
 ## Data File Format
 

@@ -146,7 +146,7 @@ while (main loop — FRAME_MS = 100 ms) is (each frame)
   else (yes)
     if (recovering from WIFI_LOST?) then (yes)
       :animator = **IdleSparkle**;
-      note right: 💡 near-invisible cool-white twinkle
+      note right: 💡 candle flicker — Gaussian noise + bell-strike peaks
       :error_mode = None; in_idle = True;
     endif
 
@@ -186,7 +186,7 @@ while (main loop — FRAME_MS = 100 ms) is (each frame)
 
           if (persistent failure?) then (yes)
             :animator = **IdleSparkle**;
-            note right: 💡 near-invisible\ncool-white twinkle
+            note right: 💡 candle flicker
             :in_idle = True;
           elseif (was idle — first hit?) then (yes)
             :animator = **StartupFlare**;
@@ -205,7 +205,7 @@ while (main loop — FRAME_MS = 100 ms) is (each frame)
   ' ── AUTH_FAIL clears when animation finishes ────────────────
   if (AUTH_FAIL AND ErrorIndicator.done?) then (yes)
     :animator = **IdleSparkle**;
-    note right: 💡 near-invisible\ncool-white twinkle
+    note right: 💡 candle flicker
     :error_mode = None;
   endif
 

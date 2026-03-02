@@ -22,7 +22,7 @@ The three pixels show three different time slices of that mood space:
 | 2 — middle | Exponentially weighted average over the last hour |
 | 3 — rightmost | Exponentially weighted average over the last four hours |
 
-When Spotify has been quiet, all three sparkle softly. When music starts, they flare to life together and slowly differentiate as history builds up.
+When Spotify has been quiet, all three flicker like a distant candle — a Gaussian noise baseline punctuated by occasional soft swells and rare bright bell-strike peaks. When music starts, they flare to life together and slowly differentiate as history builds up.
 
 ### Personalised color mapping
 
@@ -103,6 +103,7 @@ data/
 └── synaesthesia/              # Generated colour profiles (gitignored; flash to device)
 build/
 ├── reset.sh              # Erase and reflash the ESP32 with the latest MicroPython
+├── deploy.sh             # Copy firmware/bundles to an already-flashed board
 └── firmware/             # Downloaded MicroPython binaries (gitignored)
 ```
 
