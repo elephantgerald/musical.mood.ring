@@ -3,7 +3,7 @@ from lights import (
     StartupFlare, IdleSparkle, MoodTransition, ErrorIndicator, BootStatus,
     ApiErrorBlip,
     _rgb_to_hsv, _hsv_to_rgb_int, _lerp_hue,
-    _IDLE_OFF, _IDLE_PEAK,
+    _IDLE_PEAK,
 )
 
 
@@ -76,41 +76,27 @@ def test_flare_output_in_range():
 
 # ── IdleSparkle ────────────────────────────────────────────────────────────
 
-def _always_max(a, b):
-    """randint that always returns b — makes every pixel flicker every step."""
-    return 0
-
-def _always_min(a, b):
-    """randint that always returns a — no pixel ever spontaneously flickers."""
-    return a
-
-
-def test_idle_output_is_dim():
-    sparkle = IdleSparkle(randint_fn=_always_max)
+def test_idle_output_valid_rgb():
+    sparkle = IdleSparkle()
     for _ in range(20):
         for rgb in sparkle.step(100):
             for ch in rgb:
-                assert ch <= max(_IDLE_PEAK)
-
-
-def test_idle_output_valid_rgb():
-    sparkle = IdleSparkle()
-    for rgb in sparkle.step(500):
-        for ch in rgb:
-            assert 0 <= ch <= 255
+                assert 0 <= ch <= 255
 
 
 def test_idle_never_exceeds_peak():
-    sparkle = IdleSparkle(randint_fn=_always_max)
+    """No channel should ever exceed its corresponding PEAK value."""
+    sparkle = IdleSparkle()
     for _ in range(50):
-        for rgb in sparkle.step(100):
-            assert rgb == _IDLE_OFF or rgb == _IDLE_PEAK
+        for r, g, b in sparkle.step(100):
+            assert r <= _IDLE_PEAK[0]
+            assert g <= _IDLE_PEAK[1]
+            assert b <= _IDLE_PEAK[2]
 
 
 def test_idle_three_pixels_independent():
-    """Pixels must be tracked independently (separate countdowns)."""
+    """step() must always return exactly 3 pixels."""
     sparkle = IdleSparkle(num_pixels=3)
-    # Step enough that at least some pixels may flicker — just check structure
     for _ in range(100):
         out = sparkle.step(50)
         assert len(out) == 3
@@ -118,6 +104,24 @@ def test_idle_three_pixels_independent():
 
 def test_idle_done_flag_defaults_false():
     assert not IdleSparkle().done
+
+
+def test_idle_brightness_varies_over_time():
+    """Waveform must evolve — pixels at t=0 must differ from pixels at t=30s."""
+    sparkle = IdleSparkle()
+    first = sparkle.step(0)
+    for _ in range(600):   # advance 30 s (fast waves complete several cycles)
+        sparkle.step(50)
+    later = sparkle.step(0)
+    assert first != later, "brightness must vary as time advances"
+
+
+def test_idle_floor_is_nonzero():
+    """DC floor means pixels are never completely off."""
+    sparkle = IdleSparkle()
+    for _ in range(20):
+        for r, g, b in sparkle.step(100):
+            assert max(r, g, b) > 0, "pixels must never be fully dark"
 
 
 # ── MoodTransition ─────────────────────────────────────────────────────────

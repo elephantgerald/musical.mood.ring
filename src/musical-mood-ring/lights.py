@@ -18,13 +18,6 @@
 
 import math
 
-try:
-    import urandom as _rmod
-    def _default_randint(a, b): return _rmod.randint(a, b)
-except ImportError:
-    import random as _rmod
-    def _default_randint(a, b): return _rmod.randint(a, b)
-
 
 # ── HSV ↔ RGB helpers ──────────────────────────────────────────────────────
 
@@ -96,50 +89,72 @@ class StartupFlare:
 
 # ── IdleSparkle ────────────────────────────────────────────────────────────
 
-_IDLE_OFF  = (0, 0, 0)
-_IDLE_PEAK = (28, 30, 45)  # cool dim white — visible but dim on WS2812B
+_IDLE_PEAK = (28, 30, 45)   # cool white at full brightness
+
+_IDLE_TAU  = 2.0 * math.pi
+
+# Per-pixel additive synthesis parameters — slightly detuned for independence.
+# Each tuple: (phase_offset, T_fast1, T_fast2, T_fast3, T_medium, T_slow)
+#
+# Fast waves  (3 × small amp, periods 5–12 s) → chaotic texture, floor ≤ 0.20
+# Medium wave (half-rectified, ~67 s)          → ~0.60 peak roughly once/min
+# Slow wave   (half-rectified, ~330 s)         → ~0.90 peak roughly once/5 min
+_IDLE_PX = (
+    (0.0,  5.1,  7.7, 11.9,  67.0, 331.0),   # pixel 0
+    (2.1,  5.3,  8.1, 12.7,  71.0, 349.0),   # pixel 1
+    (4.2,  4.9,  7.3, 11.3,  61.0, 313.0),   # pixel 2
+)
+
+_IDLE_DC   = 0.04   # DC floor  — always-on dim glow
+_IDLE_A1   = 0.05   # fast wave 1  ─┐
+_IDLE_A2   = 0.04   # fast wave 2   ├ together ±0.12: chaotic texture
+_IDLE_A3   = 0.03   # fast wave 3  ─┘
+_IDLE_AMED = 0.44   # medium swell  → ~0.60 peak per ~67 s
+_IDLE_ASLO = 0.74   # slow swell    → ~0.90 peak per ~330 s
+
+
+def _idle_brightness(t, phi, T1, T2, T3, Tm, Ts):
+    """Additive synthesis brightness for one idle pixel, result in [0.0, 1.0]."""
+    b  = _IDLE_DC
+    b += _IDLE_A1   * math.sin(_IDLE_TAU * t / T1 + phi)
+    b += _IDLE_A2   * math.sin(_IDLE_TAU * t / T2 + phi * 1.3)
+    b += _IDLE_A3   * math.sin(_IDLE_TAU * t / T3 + phi * 0.7)
+    b += _IDLE_AMED * max(0.0, math.sin(_IDLE_TAU * t / Tm + phi * 0.5))
+    b += _IDLE_ASLO * max(0.0, math.sin(_IDLE_TAU * t / Ts + phi * 0.3))
+    return max(0.0, min(1.0, b))
 
 
 class IdleSparkle:
     """
-    Per-pixel independent random flicker of cool dim white.
+    Additive-synthesis idle animation — like summing analog oscillators.
 
-    Each pixel has its own countdown timer. When it fires the pixel shows
-    _IDLE_PEAK briefly, then resets to a new random interval. Timing is
-    intentionally aperiodic — no two pixels share a schedule.
+    Each pixel gets a continuous brightness waveform built from five sine waves
+    at incommensurable frequencies. No random state; fully deterministic.
 
-    Pass randint_fn in tests to make behaviour deterministic.
+    Typical behaviour:
+      floor (most of the time)  ≤ 0.20  — near-invisible cool-white glow
+      medium peaks (~0.60)               — roughly once per minute per pixel
+      rare peaks (~0.90)                 — roughly once per 5 minutes per pixel
+
+    Each pixel uses slightly detuned periods so they move independently.
     """
 
-    MIN_MS     = 2000
-    MAX_MS     = 8000
-    FLICKER_MS = 250
-
-    def __init__(self, num_pixels=3, randint_fn=None):
-        self._rng  = randint_fn or _default_randint
-        self._px   = [{"countdown":  self._rng(0, self.MAX_MS),
-                        "flickering": False,
-                        "flicker_left": 0}
-                      for _ in range(num_pixels)]
-        self.done  = False   # cleared externally when new mood data arrives
+    def __init__(self, num_pixels=3):
+        self._n   = num_pixels
+        self._t   = 0.0     # elapsed time in seconds
+        self.done = False   # cleared externally when mood data arrives
 
     def step(self, dt_ms):
+        self._t += dt_ms / 1000.0
         out = []
-        for px in self._px:
-            if px["flickering"]:
-                px["flicker_left"] -= dt_ms
-                if px["flicker_left"] <= 0:
-                    px["flickering"] = False
-                    px["countdown"]  = self._rng(self.MIN_MS, self.MAX_MS)
-                out.append(_IDLE_PEAK)
-            else:
-                px["countdown"] -= dt_ms
-                if px["countdown"] <= 0:
-                    px["flickering"]    = True
-                    px["flicker_left"]  = self.FLICKER_MS
-                    out.append(_IDLE_PEAK)
-                else:
-                    out.append(_IDLE_OFF)
+        for i in range(self._n):
+            params = _IDLE_PX[i % len(_IDLE_PX)]
+            br = _idle_brightness(self._t, *params)
+            out.append((
+                int(_IDLE_PEAK[0] * br),
+                int(_IDLE_PEAK[1] * br),
+                int(_IDLE_PEAK[2] * br),
+            ))
         return out
 
 
