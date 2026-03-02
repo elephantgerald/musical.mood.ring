@@ -40,25 +40,30 @@ _DC   = 0.04   # DC floor  — always-on dim glow
 _A1   = 0.05   # fast wave 1  ─┐
 _A2   = 0.04   # fast wave 2   ├ together ±0.12: chaotic texture, floor ≤ 0.20
 _A3   = 0.03   # fast wave 3  ─┘
-_AMED = 0.44   # medium swell amplitude → ~0.60 peak per ~67 s  (~1 / min)
-_ASLO = 0.74   # slow swell amplitude   → ~0.90 peak per ~330 s (~1 / 5 min)
+_AMED = 0.56   # medium swell amplitude → ~0.60 total peak per ~67 s  (~1 / min)
+_ASLO = 0.86   # slow swell amplitude   → ~0.90 total peak per ~330 s (~1 / 5 min)
+_POW  = 6      # swell sharpness — sin^6 collapses duty cycle to ~15%
 
-# Per-pixel: (phase_offset, T_fast1, T_fast2, T_fast3, T_medium, T_slow)
+# Per-pixel: (phase_offset, T_fast1, T_fast2, T_fast3,
+#             T_medium, t_off_medium, T_slow, t_off_slow)
+# t_off chosen so each swell starts in its negative half at t=0.
 _PIXELS = (
-    (0.0,  5.1,  7.7, 11.9,  67.0, 331.0),   # pixel 0
-    (2.1,  5.3,  8.1, 12.7,  71.0, 349.0),   # pixel 1
-    (4.2,  4.9,  7.3, 11.3,  61.0, 313.0),   # pixel 2
+    (0.0,  5.1,  7.7, 11.9,  67.0,  40.2,  331.0, 198.6),   # pixel 0
+    (2.1,  5.3,  8.1, 12.7,  71.0,  49.7,  349.0, 244.3),   # pixel 1
+    (4.2,  4.9,  7.3, 11.3,  61.0,  48.8,  313.0, 250.4),   # pixel 2
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _brightness(t, phi, T1, T2, T3, Tm, Ts):
+def _brightness(t, phi, T1, T2, T3, Tm, t_off_m, Ts, t_off_s):
     b  = _DC
-    b += _A1   * math.sin(_TAU * t / T1 + phi)
-    b += _A2   * math.sin(_TAU * t / T2 + phi * 1.3)
-    b += _A3   * math.sin(_TAU * t / T3 + phi * 0.7)
-    b += _AMED * max(0.0, math.sin(_TAU * t / Tm + phi * 0.5))
-    b += _ASLO * max(0.0, math.sin(_TAU * t / Ts + phi * 0.3))
+    b += _A1 * math.sin(_TAU * t / T1 + phi)
+    b += _A2 * math.sin(_TAU * t / T2 + phi * 1.3)
+    b += _A3 * math.sin(_TAU * t / T3 + phi * 0.7)
+    sm  = max(0.0, math.sin(_TAU * (t + t_off_m) / Tm))
+    b  += _AMED * sm ** _POW
+    ss  = max(0.0, math.sin(_TAU * (t + t_off_s) / Ts))
+    b  += _ASLO * ss ** _POW
     return max(0.0, min(1.0, b))
 
 

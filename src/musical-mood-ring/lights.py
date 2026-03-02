@@ -94,33 +94,40 @@ _IDLE_PEAK = (28, 30, 45)   # cool white at full brightness
 _IDLE_TAU  = 2.0 * math.pi
 
 # Per-pixel additive synthesis parameters — slightly detuned for independence.
-# Each tuple: (phase_offset, T_fast1, T_fast2, T_fast3, T_medium, T_slow)
+# Each tuple: (phase_offset, T_fast1, T_fast2, T_fast3,
+#              T_medium, t_off_medium, T_slow, t_off_slow)
 #
 # Fast waves  (3 × small amp, periods 5–12 s) → chaotic texture, floor ≤ 0.20
-# Medium wave (half-rectified, ~67 s)          → ~0.60 peak roughly once/min
-# Slow wave   (half-rectified, ~330 s)         → ~0.90 peak roughly once/5 min
+# Medium wave (sin^6, ~67 s)                  → ~0.60 peak roughly once/min
+# Slow wave   (sin^6, ~330 s)                 → ~0.90 peak roughly once/5 min
+#
+# t_off values chosen so each swell starts in its negative half at t=0
+# (different fractions 0.6/0.7/0.8 of period spread first-peak timing).
 _IDLE_PX = (
-    (0.0,  5.1,  7.7, 11.9,  67.0, 331.0),   # pixel 0
-    (2.1,  5.3,  8.1, 12.7,  71.0, 349.0),   # pixel 1
-    (4.2,  4.9,  7.3, 11.3,  61.0, 313.0),   # pixel 2
+    (0.0,  5.1,  7.7, 11.9,  67.0,  40.2,  331.0, 198.6),   # pixel 0
+    (2.1,  5.3,  8.1, 12.7,  71.0,  49.7,  349.0, 244.3),   # pixel 1
+    (4.2,  4.9,  7.3, 11.3,  61.0,  48.8,  313.0, 250.4),   # pixel 2
 )
 
 _IDLE_DC   = 0.04   # DC floor  — always-on dim glow
 _IDLE_A1   = 0.05   # fast wave 1  ─┐
 _IDLE_A2   = 0.04   # fast wave 2   ├ together ±0.12: chaotic texture
 _IDLE_A3   = 0.03   # fast wave 3  ─┘
-_IDLE_AMED = 0.44   # medium swell  → ~0.60 peak per ~67 s
-_IDLE_ASLO = 0.74   # slow swell    → ~0.90 peak per ~330 s
+_IDLE_AMED = 0.56   # medium swell amplitude → ~0.60 total peak per ~67 s
+_IDLE_ASLO = 0.86   # slow swell amplitude   → ~0.90 total peak per ~330 s
+_IDLE_POW  = 6      # swell sharpness — sin^6 collapses duty cycle to ~15%
 
 
-def _idle_brightness(t, phi, T1, T2, T3, Tm, Ts):
+def _idle_brightness(t, phi, T1, T2, T3, Tm, t_off_m, Ts, t_off_s):
     """Additive synthesis brightness for one idle pixel, result in [0.0, 1.0]."""
     b  = _IDLE_DC
     b += _IDLE_A1   * math.sin(_IDLE_TAU * t / T1 + phi)
     b += _IDLE_A2   * math.sin(_IDLE_TAU * t / T2 + phi * 1.3)
     b += _IDLE_A3   * math.sin(_IDLE_TAU * t / T3 + phi * 0.7)
-    b += _IDLE_AMED * max(0.0, math.sin(_IDLE_TAU * t / Tm + phi * 0.5))
-    b += _IDLE_ASLO * max(0.0, math.sin(_IDLE_TAU * t / Ts + phi * 0.3))
+    sm  = max(0.0, math.sin(_IDLE_TAU * (t + t_off_m) / Tm))
+    b  += _IDLE_AMED * sm ** _IDLE_POW
+    ss  = max(0.0, math.sin(_IDLE_TAU * (t + t_off_s) / Ts))
+    b  += _IDLE_ASLO * ss ** _IDLE_POW
     return max(0.0, min(1.0, b))
 
 
@@ -139,17 +146,22 @@ class IdleSparkle:
     Each pixel uses slightly detuned periods so they move independently.
     """
 
+    _SMOOTH = 0.3   # EWMA alpha — tune toward 0 for more smoothing
+
     def __init__(self, num_pixels=3):
         self._n   = num_pixels
-        self._t   = 0.0     # elapsed time in seconds
-        self.done = False   # cleared externally when mood data arrives
+        self._t   = 0.0               # elapsed time in seconds
+        self._br  = [0.0] * num_pixels  # smoothed brightness per pixel
+        self.done = False             # cleared externally when mood data arrives
 
     def step(self, dt_ms):
         self._t += dt_ms / 1000.0
         out = []
         for i in range(self._n):
             params = _IDLE_PX[i % len(_IDLE_PX)]
-            br = _idle_brightness(self._t, *params)
+            target = _idle_brightness(self._t, *params)
+            self._br[i] = self._SMOOTH * target + (1.0 - self._SMOOTH) * self._br[i]
+            br = self._br[i]
             out.append((
                 int(_IDLE_PEAK[0] * br),
                 int(_IDLE_PEAK[1] * br),

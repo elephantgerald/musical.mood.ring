@@ -35,6 +35,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "  --project mood.ring   Full mood ring: .py firmware + bundles (default)"
             echo "  --project twinkle     Hardware test: test_boot.py + twinkle_test.py"
+            echo "  --project whitenoise  Hardware test: test_boot.py + whitenoise_test.py"
             echo "  --firmware-only       mood.ring only: .py files only, skip bundles"
             echo "  --bundles-only        mood.ring only: bundles only, skip .py files"
             echo "  --no-reset            Skip board reset after deploying"
@@ -46,8 +47,8 @@ while [[ $# -gt 0 ]]; do
         --project)
             shift
             PROJECT="${1:-}"
-            if [[ "$PROJECT" != "mood.ring" && "$PROJECT" != "twinkle" ]]; then
-                echo "Unknown project: $PROJECT  (choose mood.ring or twinkle)"
+            if [[ "$PROJECT" != "mood.ring" && "$PROJECT" != "twinkle" && "$PROJECT" != "whitenoise" ]]; then
+                echo "Unknown project: $PROJECT  (choose mood.ring, twinkle, or whitenoise)"
                 exit 1
             fi
             ;;
@@ -124,11 +125,20 @@ copy_count=0
 
 if [[ "$PROJECT" == "twinkle" ]]; then
     echo "Project: twinkle (hardware test)"
-    echo "  test_boot.py  → /boot.py"
+    echo "  test_boot.py    → /boot.py"
     echo "  twinkle_test.py → /main.py"
     echo ""
-    copy_cmd+=(cp "$REPO_ROOT/tests/hardware/test_boot.py"    ":/boot.py")
+    copy_cmd+=(cp "$REPO_ROOT/tests/hardware/test_boot.py"      ":/boot.py")
     copy_cmd+=(+ cp "$REPO_ROOT/tests/hardware/twinkle_test.py" ":/main.py")
+    copy_count=2
+
+elif [[ "$PROJECT" == "whitenoise" ]]; then
+    echo "Project: whitenoise (hardware test)"
+    echo "  test_boot.py       → /boot.py"
+    echo "  whitenoise_test.py → /main.py"
+    echo ""
+    copy_cmd+=(cp "$REPO_ROOT/tests/hardware/test_boot.py"         ":/boot.py")
+    copy_cmd+=(+ cp "$REPO_ROOT/tests/hardware/whitenoise_test.py" ":/main.py")
     copy_count=2
 
 else
