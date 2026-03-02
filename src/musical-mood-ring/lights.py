@@ -17,6 +17,7 @@
 #   ApiErrorBlip    — brief complementary double-flash on transient API error
 
 import math
+import random
 
 
 # ── HSV ↔ RGB helpers ──────────────────────────────────────────────────────
@@ -93,74 +94,80 @@ _IDLE_PEAK = (28, 30, 45)   # cool white at full brightness
 
 _IDLE_TAU  = 2.0 * math.pi
 
-# Per-pixel additive synthesis parameters — slightly detuned for independence.
-# Each tuple: (phase_offset, T_fast1, T_fast2, T_fast3,
-#              T_medium, t_off_medium, T_slow, t_off_slow)
-#
-# Fast waves  (3 × small amp, periods 5–12 s) → chaotic texture, floor ≤ 0.20
-# Medium wave (sin^6, ~67 s)                  → ~0.60 peak roughly once/min
-# Slow wave   (sin^6, ~330 s)                 → ~0.90 peak roughly once/5 min
-#
-# t_off values chosen so each swell starts in its negative half at t=0
-# (different fractions 0.6/0.7/0.8 of period spread first-peak timing).
+# Per-pixel swell parameters: (phi, T_med, t_off_med, T_slow, t_off_slow)
+# Slightly detuned so pixels breathe independently.
+# Slow periods ~360 s → bell strikes roughly once per 6 min per pixel.
 _IDLE_PX = (
-    (0.0,  5.1,  7.7, 11.9,  67.0,  40.2,  331.0, 198.6),   # pixel 0
-    (2.1,  5.3,  8.1, 12.7,  71.0,  49.7,  349.0, 244.3),   # pixel 1
-    (4.2,  4.9,  7.3, 11.3,  61.0,  48.8,  313.0, 250.4),   # pixel 2
+    (0.0,  67.0,  40.2,  360.0, 216.0),   # pixel 0
+    (2.1,  71.0,  49.7,  379.0, 265.3),   # pixel 1
+    (4.2,  61.0,  48.8,  341.0, 272.8),   # pixel 2
 )
 
-_IDLE_DC   = 0.04   # DC floor  — always-on dim glow
-_IDLE_A1   = 0.05   # fast wave 1  ─┐
-_IDLE_A2   = 0.04   # fast wave 2   ├ together ±0.12: chaotic texture
-_IDLE_A3   = 0.03   # fast wave 3  ─┘
-_IDLE_AMED = 0.56   # medium swell amplitude → ~0.60 total peak per ~67 s
-_IDLE_ASLO = 0.86   # slow swell amplitude   → ~0.90 total peak per ~330 s
-_IDLE_POW  = 6      # swell sharpness — sin^6 collapses duty cycle to ~15%
+# Noise baseline (candle flicker texture)
+_IDLE_MU         = 0.08   # noise centre — dim glow, leaves headroom for swells
+_IDLE_SIGMA      = 0.06   # std dev — 68% of noise in [0.02, 0.14]
+_IDLE_FLOOR      = 0.01   # hard floor
+_IDLE_NOISE_CEIL = 0.20   # noise hard cap — swells push above this
+
+# Medium swell (sin^6, ~67 s) → ~0.60 total peak roughly once/min
+_IDLE_AMED = 0.52
+_IDLE_POW  = 6
+
+# Slow swell — bell-strike envelope (~360 s) → ~0.90 total peak ~once/6 min
+_IDLE_ASLO       = 0.82
+_IDLE_RING_DECAY = 0.977   # per-frame at 50 ms — half-life ~1.5 s
+
+_IDLE_ALPHA = 0.15         # EWMA output smoothing
 
 
-def _idle_brightness(t, phi, T1, T2, T3, Tm, t_off_m, Ts, t_off_s):
-    """Additive synthesis brightness for one idle pixel, result in [0.0, 1.0]."""
-    b  = _IDLE_DC
-    b += _IDLE_A1   * math.sin(_IDLE_TAU * t / T1 + phi)
-    b += _IDLE_A2   * math.sin(_IDLE_TAU * t / T2 + phi * 1.3)
-    b += _IDLE_A3   * math.sin(_IDLE_TAU * t / T3 + phi * 0.7)
-    sm  = max(0.0, math.sin(_IDLE_TAU * (t + t_off_m) / Tm))
-    b  += _IDLE_AMED * sm ** _IDLE_POW
-    ss  = max(0.0, math.sin(_IDLE_TAU * (t + t_off_s) / Ts))
-    b  += _IDLE_ASLO * ss ** _IDLE_POW
-    return max(0.0, min(1.0, b))
+def _idle_gauss():
+    """Box-Muller normal sample (MicroPython has no random.gauss)."""
+    u1 = random.random() or 1e-9
+    u2 = random.random()
+    return math.sqrt(-2.0 * math.log(u1)) * math.cos(_IDLE_TAU * u2)
 
 
 class IdleSparkle:
     """
-    Additive-synthesis idle animation — like summing analog oscillators.
+    Idle animation: Gaussian noise candle baseline + deterministic swells.
 
-    Each pixel gets a continuous brightness waveform built from five sine waves
-    at incommensurable frequencies. No random state; fully deterministic.
+      baseline  Gaussian noise → organic candle flicker texture
+      medium    sin^6 swell (~67 s)   → ~0.60 peak roughly once/min
+      slow      bell-strike envelope  → ~0.90 peak roughly once/6 min,
+                instantaneous attack at swell zero-crossing, exponential decay
 
-    Typical behaviour:
-      floor (most of the time)  ≤ 0.20  — near-invisible cool-white glow
-      medium peaks (~0.60)               — roughly once per minute per pixel
-      rare peaks (~0.90)                 — roughly once per 5 minutes per pixel
-
-    Each pixel uses slightly detuned periods so they move independently.
+    Each pixel is independent: slightly detuned swell periods, independent
+    noise streams.  EWMA smooths the combined output frame-to-frame.
     """
 
-    _SMOOTH = 0.3   # EWMA alpha — tune toward 0 for more smoothing
-
     def __init__(self, num_pixels=3):
-        self._n   = num_pixels
-        self._t   = 0.0               # elapsed time in seconds
-        self._br  = [0.0] * num_pixels  # smoothed brightness per pixel
-        self.done = False             # cleared externally when mood data arrives
+        self._n          = num_pixels
+        self._t          = 0.0
+        self._br         = [_IDLE_MU] * num_pixels   # smoothed output
+        self._ring_amp   = [0.0]      * num_pixels   # decaying bell amplitude
+        self._was_silent = [True]     * num_pixels   # slow swell zero last frame?
+        self.done        = False
 
     def step(self, dt_ms):
         self._t += dt_ms / 1000.0
         out = []
         for i in range(self._n):
-            params = _IDLE_PX[i % len(_IDLE_PX)]
-            target = _idle_brightness(self._t, *params)
-            self._br[i] = self._SMOOTH * target + (1.0 - self._SMOOTH) * self._br[i]
+            phi, Tm, t_off_m, Ts, t_off_s = _IDLE_PX[i % len(_IDLE_PX)]
+
+            noise  = min(_IDLE_NOISE_CEIL, max(_IDLE_FLOOR,
+                         _IDLE_MU + _IDLE_SIGMA * _idle_gauss()))
+
+            sm     = max(0.0, math.sin(_IDLE_TAU * (self._t + t_off_m) / Tm))
+            medium = _IDLE_AMED * sm ** _IDLE_POW
+
+            slow_raw = math.sin(_IDLE_TAU * (self._t + t_off_s) / Ts)
+            if slow_raw > 0 and self._was_silent[i]:
+                self._ring_amp[i] = _IDLE_ASLO
+            self._was_silent[i] = slow_raw <= 0
+            self._ring_amp[i]  *= _IDLE_RING_DECAY
+
+            target      = min(1.0, noise + medium + self._ring_amp[i])
+            self._br[i] = _IDLE_ALPHA * target + (1.0 - _IDLE_ALPHA) * self._br[i]
             br = self._br[i]
             out.append((
                 int(_IDLE_PEAK[0] * br),
