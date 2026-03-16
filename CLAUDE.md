@@ -20,8 +20,7 @@ data/musical-affective-memory/  # (valence, energy) per track ID (JSON per playl
 data/musical-memory-bundle/     # Versioned MMAR binaries for flashing to ESP32
 data/synaesthesia/        # Generated colour profiles, one per person (gitignored)
 tests/unit/               # pytest, hardware-mocked
-tests/integration/        # Mock Spotify API server
-tests/end-to-end/         # Hardware-in-loop
+tests/hardware/           # Hardware-in-loop tests (run via mpremote on real ESP32)
 build/                    # Flash/deploy scripts
 build/firmware/           # Downloaded MicroPython binaries (gitignored)
 ```
@@ -51,6 +50,9 @@ cat urls.txt | python src/musical-cultivator/scripts/import_urls.py \
 
 # Fetch human-readable metadata (artist/title/album) from Spotify web player
 python src/musical-cultivator/scripts/fetch_metadata.py [--file name.json]
+
+# Backfill artist_id into gestalt JSONs (required before bottle.py for artist bundle)
+python src/musical-cultivator/scripts/fetch_artist_ids.py [--file name.json]
 ```
 
 **Stage 2 — Enrich** (adds MB/AB/Last.fm data in-place to `data/musical-gestalt/`):
@@ -69,6 +71,14 @@ python src/musical-distiller/distill.py [--split training|test|all]
 **Stage 4 — Bottle** (`data/musical-memory-bundle/`):
 ```bash
 python src/musical-bottler/bottle.py
+```
+
+**Library growth — import device miss log into the pipeline:**
+```bash
+# Pull novel track IDs from a running device and write a new gestalt batch:
+python src/musical-cultivator/scripts/import_misses.py [--host musical-mood-ring.local] [--clear]
+# Then continue with the normal pipeline from fetch_metadata.py through bottle.py.
+# Also supports --file PATH and --stdin for offline miss logs; --dry-run to preview.
 ```
 
 **Unit tests** (pure CPython, no board needed):

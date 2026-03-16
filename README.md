@@ -67,13 +67,13 @@ Spotify app registration (redirect URI, user allowlist, API limitations):
 
 ## Status
 
-Software is complete through M7. Waiting on hardware (NeoPixel chain) for M8.
+Software is complete through M7, including the full offline pipeline (track + artist bundles) and device feedback loop. Waiting on hardware assembly for M8.
 
 **Milestones:**
 
 | # | Name | Status |
 |---|---|---|
-| M0 | Mood model calibration (offline pipeline) | Complete |
+| M0 | Mood model calibration (offline pipeline) | Pipeline complete; test-set validation pending |
 | M1 | Firmware scaffold + unit test harness | Complete |
 | M2 | WiFi + configuration server | Complete |
 | M3 | Spotify OAuth | Complete |
