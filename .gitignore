@@ -6,6 +6,7 @@
 .env.*
 *.env
 !.env.example
+config.json
 __ssid
 __password
 __spotify_refresh_token
