@@ -10,10 +10,14 @@
 #
 #   Phase 2 — Spotify OAuth (STA mode, after WiFi is configured):
 #     GET  /                      → Spotify credentials form (if not saved yet)
-#                                   or "Authorize" button (if creds saved)
+#                                   or PC-script instructions (if creds saved)
 #     POST /spotify/credentials   → save client_id + secret, reload, redirect to /
 #     GET  /spotify/auth          → 302 redirect to Spotify authorization URL
 #     GET  /callback              → exchange code, save refresh token, done
+#     POST /spotify/token         → accept pre-obtained refresh token from PC-side
+#                                   OAuth helper (build/spotify_auth.py); saves and
+#                                   signals done. Used because Spotify blocks non-HTTPS
+#                                   redirect URIs for non-localhost hosts.
 #
 #   Utility endpoints (always available in main loop):
 #     GET  /misses                → plain-text list of unrecognised track IDs
@@ -85,8 +89,7 @@ _HTML_SPOTIFY_CREDS_FORM = (
     "<body><h2>Spotify Setup</h2>"
     "<p>Enter your Spotify app credentials. "
     "<a href=https://developer.spotify.com/dashboard target=_blank>Create an app</a>"
-    " and set the redirect URI to "
-    "<code>http://musical-mood-ring.local/callback</code>.</p>"
+    " and add <code>http://127.0.0.1:8888/callback</code> as a redirect URI.</p>"
     "<form method=post action=/spotify/credentials>"
     "<label>Client ID<br>"
     "<input name=client_id type=text autocomplete=off></label>"
@@ -99,8 +102,13 @@ _HTML_SPOTIFY_CREDS_FORM = (
 _HTML_SPOTIFY_AUTHORIZE = (
     _HEAD + "<title>musical.mood.ring — Authorize</title>" + _STYLE + "</head>"
     "<body><h2>Authorize Spotify</h2>"
-    "<p>App credentials saved. Click below to grant this device access.</p>"
-    "<a href=/spotify/auth class='btn green'>Authorize with Spotify</a>"
+    "<p>Credentials saved. On your PC, run:</p>"
+    "<pre style='background:#f4f4f4;padding:.8em;overflow-x:auto'>"
+    "python build/spotify_auth.py</pre>"
+    "<p>If <code>musical-mood-ring.local</code> does not resolve, pass your device IP:</p>"
+    "<pre style='background:#f4f4f4;padding:.8em;overflow-x:auto'>"
+    "python build/spotify_auth.py 10.0.0.xx</pre>"
+    "<p>The device will start automatically once authorized.</p>"
     "</body></html>"
 )
 
@@ -195,6 +203,8 @@ class ConfigServer:
             self._handle_spotify_auth(conn)
         elif method == "GET" and path == "/callback":
             self._handle_spotify_callback(conn, _parse_form(query))
+        elif method == "POST" and path == "/spotify/token":
+            self._handle_spotify_token(conn, _extract_body(raw))
         elif method == "GET" and path == "/misses":
             self._handle_misses(conn)
         else:
@@ -272,6 +282,17 @@ class ConfigServer:
         config.save({"spotify_refresh_token": refresh_token})
         config.reload()
         self.done = True  # boot.py exits the loop and falls through to main.py
+
+    def _handle_spotify_token(self, conn, body):
+        """Accept a pre-obtained refresh token from the PC-side OAuth helper."""
+        token = _parse_form(body).get("refresh_token", "").strip()
+        if not token:
+            conn.send(b"HTTP/1.0 400 Bad Request\r\n\r\nMissing refresh_token")
+            return
+        conn.send(b"HTTP/1.0 200 OK\r\n\r\nOK")
+        config.save({"spotify_refresh_token": token})
+        config.reload()
+        self.done = True
 
     def _handle_misses(self, conn):
         """Return the miss log as plain text (one track ID per line)."""

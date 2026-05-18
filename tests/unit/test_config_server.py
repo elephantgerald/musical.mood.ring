@@ -122,7 +122,7 @@ def test_get_root_spotify_creds_set_shows_authorize(monkeypatch):
     conn = MagicMock()
     server._dispatch(conn, "GET / HTTP/1.1\r\n\r\n")
     body = conn.send.call_args[0][0].decode()
-    assert "/spotify/auth" in body
+    assert "spotify_auth.py" in body
 
 
 # ── POST /spotify/credentials ────────────────────────────────────────────────
@@ -218,6 +218,28 @@ def test_callback_exchange_fails_shows_error_page(monkeypatch):
     server._dispatch(conn, "GET /callback?code=BADCODE HTTP/1.1\r\n\r\n")
     body = conn.send.call_args[0][0].decode()
     assert "fail" in body.lower() or "error" in body.lower()
+    assert not server.done
+
+
+# ── POST /spotify/token ───────────────────────────────────────────────────────
+
+def test_post_spotify_token_saves_and_sets_done(monkeypatch):
+    saved = {}
+    monkeypatch.setattr(config_server.config, "save",   lambda d: saved.update(d))
+    monkeypatch.setattr(config_server.config, "reload", lambda: None)
+    server = _make_server()
+    conn = MagicMock()
+    server._dispatch(conn, "POST /spotify/token HTTP/1.1\r\n\r\nrefresh_token=tok123")
+    assert saved.get("spotify_refresh_token") == "tok123"
+    assert server.done
+    assert "200" in conn.send.call_args[0][0].decode()
+
+
+def test_post_spotify_token_missing_token_returns_400(monkeypatch):
+    server = _make_server()
+    conn = MagicMock()
+    server._dispatch(conn, "POST /spotify/token HTTP/1.1\r\n\r\nrefresh_token=")
+    assert "400" in conn.send.call_args[0][0].decode()
     assert not server.done
 
 
