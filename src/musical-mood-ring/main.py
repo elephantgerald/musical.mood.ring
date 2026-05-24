@@ -31,6 +31,7 @@ import config
 import pixel
 import spotify
 import wifi
+from config_server import ConfigServer
 from mmar          import load as mmar_load
 from mood_engine   import MoodEngine
 from poller        import Poller
@@ -78,6 +79,7 @@ def main():
     state        = RuntimeState()
     state.engine = MoodEngine(bundle, artist_bundle)
     poller       = Poller()
+    cfg_server   = ConfigServer()
     access_token = None
     expires_at   = 0
 
@@ -105,6 +107,7 @@ def main():
         # ── Housekeeping ─────────────────────────────────────────────────
         if _wdt:
             _wdt.feed()
+        cfg_server.step()
         _loop_count += 1
         if _loop_count % _GC_INTERVAL == 0:
             gc.collect()
@@ -125,7 +128,7 @@ def main():
             in_idle    = True
 
         # ── Poll ──────────────────────────────────────────────────────────
-        if error_mode is None and poller.should_poll(now_ms):
+        if error_mode is None and config.SPOTIFY_REFRESH_TOKEN and poller.should_poll(now_ms):
             # Refresh access token when absent or near expiry
             if access_token is None or now_ms >= expires_at:
                 token, expires_in = spotify.refresh_token(
@@ -140,6 +143,8 @@ def main():
                     animator   = ErrorIndicator(ErrorIndicator.AUTH_FAIL)
                     error_mode = ErrorIndicator.AUTH_FAIL
                     poller.on_error(now_ms)
+                if _wdt:
+                    _wdt.feed()   # token call may have consumed several seconds
 
             if access_token and error_mode is None:
                 track_ids = spotify.recently_played(access_token)

@@ -22,6 +22,8 @@
 #   Utility endpoints (always available in main loop):
 #     GET  /misses                → plain-text list of unrecognised track IDs
 #                                   (one per line; pipe into cultivator pipeline)
+#     POST /config                → save arbitrary form-encoded key-value pairs to config
+#                                   (test/debug only — e.g. inject spotify_mock_host)
 #
 # The server sets done=True when setup is complete or the 5-min timer fires.
 # Caller drives the loop: while not server.done: server.step(); animate; sleep
@@ -160,6 +162,7 @@ class ConfigServer:
         except OSError:
             return  # no connection waiting — normal in non-blocking mode
         try:
+            conn.settimeout(2.0)   # don't block WDT on slow or probe connections
             raw = conn.recv(1024).decode("utf-8", "ignore")
             self._dispatch(conn, raw)
         except Exception:
@@ -205,6 +208,8 @@ class ConfigServer:
             self._handle_spotify_callback(conn, _parse_form(query))
         elif method == "POST" and path == "/spotify/token":
             self._handle_spotify_token(conn, _extract_body(raw))
+        elif method == "POST" and path == "/config":
+            self._handle_config(conn, _extract_body(raw))
         elif method == "GET" and path == "/misses":
             self._handle_misses(conn)
         else:
@@ -292,7 +297,16 @@ class ConfigServer:
         conn.send(b"HTTP/1.0 200 OK\r\n\r\nOK")
         config.save({"spotify_refresh_token": token})
         config.reload()
-        self.done = True
+
+    def _handle_config(self, conn, body):
+        """Save arbitrary key-value pairs to config (test/debug use only)."""
+        params = _parse_form(body)
+        if not params:
+            conn.send(b"HTTP/1.0 400 Bad Request\r\n\r\nNo params")
+            return
+        config.save(params)
+        config.reload()
+        conn.send(b"HTTP/1.0 200 OK\r\n\r\nOK")
 
     def _handle_misses(self, conn):
         """Return the miss log as plain text (one track ID per line)."""

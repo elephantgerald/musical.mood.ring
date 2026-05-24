@@ -86,10 +86,11 @@ python src/musical-cultivator/scripts/import_misses.py [--host musical-mood-ring
 pytest tests/unit/
 ```
 
-**Flash MicroPython to the ESP32** (WSL2 + HUZZAH32):
+**Flash MicroPython to the ESP32** (WSL2):
 ```bash
-./build/reset.sh          # auto-activates .venv; prompts for usbipd if board not found
-./build/reset.sh --help   # full usage
+./build/reset.sh --chip esp32c3   # Seeed XIAO ESP32-C3 (/dev/ttyACM0)
+./build/reset.sh --chip esp32     # Adafruit HUZZAH32   (/dev/ttyUSB0)  [default]
+./build/reset.sh --help           # full usage
 ```
 
 One-time WSL2 prerequisites:
@@ -173,13 +174,14 @@ Public API: `hue(theta_deg)`, `saturation_k()`, `brightness_floor()`, `brightnes
 **Deployment**: `mpremote` (not ampy) for flashing files to the ESP32. Use `build/reset.sh` to erase and reflash MicroPython itself. Use `build/deploy.sh` to copy firmware and bundles to an already-flashed board:
 
 ```bash
-./build/deploy.sh                        # full mood ring firmware + bundles (default)
-./build/deploy.sh --project twinkle      # hardware test: twinkle animation
-./build/deploy.sh --project whitenoise   # hardware test: white noise candle
-./build/deploy.sh --project flicker      # hardware test: candle + bell-strike peaks
-./build/deploy.sh --firmware-only        # mood.ring: .py files only, skip bundles
-./build/deploy.sh --bundles-only         # mood.ring: bundles only, skip .py files
-./build/deploy.sh --no-reset             # skip board reset after copy
+./build/deploy.sh --chip esp32c3                        # full mood ring firmware + bundles (C3)
+./build/deploy.sh --chip esp32c3 --project twinkle      # hardware test: twinkle animation
+./build/deploy.sh --chip esp32c3 --project whitenoise   # hardware test: white noise candle
+./build/deploy.sh --chip esp32c3 --project flicker      # hardware test: candle + bell-strike peaks
+./build/deploy.sh --chip esp32c3 --firmware-only        # mood.ring: .py files only, skip bundles
+./build/deploy.sh --chip esp32c3 --bundles-only         # mood.ring: bundles only, skip .py files
+./build/deploy.sh --chip esp32c3 --no-reset             # skip board reset after copy
+# (omit --chip esp32c3 for HUZZAH32)
 ```
 
 If the board is stuck running firmware (WiFi/AP stack active), `reset.sh` must be run first — the serial interrupt cannot break through the network stack.

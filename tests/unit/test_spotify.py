@@ -154,3 +154,38 @@ def test_refresh_token_sends_grant_type(monkeypatch):
     refresh_token("cid", "csec", "myrefresh")
     assert "grant_type=refresh_token" in calls["data"]
     assert "myrefresh" in calls["data"]
+
+
+# ── Mock host URL override ────────────────────────────────────────────────────
+
+def test_mock_host_overrides_recently_played_url(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(spotify._config, "SPOTIFY_MOCK_HOST", "10.0.0.21:5000")
+    def fake_get(url, headers):
+        calls["url"] = url
+        return _get_resp(200)
+    monkeypatch.setattr(spotify.requests, "get", fake_get)
+    recently_played("tok")
+    assert calls["url"] == "http://10.0.0.21:5000/v1/me/player/recently-played?limit=10"
+
+
+def test_mock_host_overrides_token_url(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(spotify._config, "SPOTIFY_MOCK_HOST", "10.0.0.21:5000")
+    def fake_post(url, headers, data):
+        calls["url"] = url
+        return _post_resp(200, {"access_token": "a", "expires_in": 3600})
+    monkeypatch.setattr(spotify.requests, "post", fake_post)
+    spotify.refresh_token("cid", "csec", "rtok")
+    assert calls["url"] == "http://10.0.0.21:5000/api/token"
+
+
+def test_no_mock_host_uses_production_urls(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(spotify._config, "SPOTIFY_MOCK_HOST", "")
+    def fake_get(url, headers):
+        calls["url"] = url
+        return _get_resp(200)
+    monkeypatch.setattr(spotify.requests, "get", fake_get)
+    recently_played("tok")
+    assert "api.spotify.com" in calls["url"]

@@ -76,6 +76,15 @@ def test_roundtrip_all_fields(tmp_path, monkeypatch):
     assert config.SPOTIFY_REFRESH_TOKEN == "rtoken"
 
 
+def test_reload_updates_spotify_mock_host(tmp_path, monkeypatch):
+    """SPOTIFY_MOCK_HOST must be updated by reload() — regression for missing global decl."""
+    cfg_file = tmp_path / "config.json"
+    monkeypatch.setattr(config, "_PATH", str(cfg_file))
+    config.save({"spotify_mock_host": "10.0.0.21:5000"})
+    config.reload()
+    assert config.SPOTIFY_MOCK_HOST == "10.0.0.21:5000"
+
+
 def test_save_reload_unicode(tmp_path, monkeypatch):
     cfg_file = tmp_path / "config.json"
     monkeypatch.setattr(config, "_PATH", str(cfg_file))
