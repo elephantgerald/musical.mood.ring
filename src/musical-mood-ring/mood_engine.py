@@ -39,6 +39,12 @@ from color import mood_to_rgb, apply_confidence
 _POLLS_1H = 20   # 60 min / 3 min
 _POLLS_4H = 80   # 240 min / 3 min
 
+# _last_outcomes entries are plain tuples for tight ESP32 memory footprint
+# (~64 B/entry vs ~150 B for dicts) and positional access cost. The field
+# layout is exported so HTTP-boundary code can rehydrate to a dict on demand
+# without redefining the schema.
+OUTCOME_FIELDS = ("track_id", "artist_id", "source", "v", "e")
+
 
 class MoodEngine:
     """
@@ -56,6 +62,7 @@ class MoodEngine:
         self._now_ve         = None   # most recent track-bundle (v, e) for pixel 0
         self._hit_poll_count = 0      # polls with ≥1 track-bundle hit
         self._confidence     = 1.0   # saturation scalar; decays on artist/miss polls
+        self._last_outcomes  = []     # per-track outcomes from most recent update()
 
     def update(self, track_pairs):
         """
@@ -69,12 +76,14 @@ class MoodEngine:
         """
         track_hits  = []   # precise (v, e) from track bundle
         artist_hits = []   # approximate (v, e) from artist bundle
+        outcomes    = []   # per-track diagnostic record for last_poll_outcomes()
 
         for track_id, artist_id in track_pairs:
             result = self._bundle.lookup(track_id)
             if result is not None:
                 track_hits.append(result)
                 self._confidence = 1.0
+                outcomes.append((track_id, artist_id, "track", result[0], result[1]))
             else:
                 miss_log.append(track_id)
                 if self._artist_bundle is not None:
@@ -82,8 +91,12 @@ class MoodEngine:
                 if result is not None:
                     artist_hits.append(result)
                     self._confidence = max(0.6, self._confidence * 0.95)
+                    outcomes.append((track_id, artist_id, "artist", result[0], result[1]))
                 else:
                     self._confidence *= 0.85
+                    outcomes.append((track_id, artist_id, "miss", None, None))
+
+        self._last_outcomes = outcomes
 
         if track_hits:
             self._now_ve = track_hits[0]    # most recently played known track
@@ -129,3 +142,29 @@ class MoodEngine:
         self._now_ve         = None
         self._hit_poll_count = 0
         self._confidence     = 1.0
+        self._last_outcomes  = []
+
+    def snapshot(self):
+        """JSON-serializable view of internal state for HTTP introspection.
+
+        Tuples become lists so the dict round-trips through json.dumps/loads
+        cleanly (json decodes arrays to lists, so storing lists here keeps
+        round-trip equality intact for tests and callers).
+        """
+        return {
+            "now_ve":         list(self._now_ve) if self._now_ve is not None else None,
+            "hit_poll_count": self._hit_poll_count,
+            "confidence":     self._confidence,
+            "ewma_1h":        list(self._ewma_1h.value),
+            "ewma_4h":        list(self._ewma_4h.value),
+        }
+
+    def last_poll_outcomes(self):
+        """Per-track outcomes from the most recent update() call.
+
+        Each entry is a 5-tuple matching OUTCOME_FIELDS:
+            (track_id, artist_id, source, v, e)
+        source ∈ {"track", "artist", "miss"}; v/e are None for misses.
+        Returns [] before the first poll and after reset().
+        """
+        return list(self._last_outcomes)

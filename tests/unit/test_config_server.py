@@ -30,6 +30,17 @@ def test_hw_flag_false_in_cpython():
     assert config_server._HW is False
 
 
+def test_state_defaults_to_none():
+    server = _make_server()
+    assert server._state is None
+
+
+def test_state_kwarg_is_stored():
+    sentinel = object()
+    server   = ConfigServer(state=sentinel, _sock=_mock_sock())
+    assert server._state is sentinel
+
+
 # ── stop() ──────────────────────────────────────────────────────────────────
 
 def test_stop_sets_done():

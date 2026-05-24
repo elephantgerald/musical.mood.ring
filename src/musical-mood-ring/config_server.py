@@ -131,8 +131,9 @@ class ConfigServer:
     Pass _sock for testing (dependency injection); omit to use a real socket.
     """
 
-    def __init__(self, host="0.0.0.0", port=80, _sock=None):
-        self.done = False
+    def __init__(self, host="0.0.0.0", port=80, state=None, _sock=None):
+        self.done   = False
+        self._state = state   # RuntimeState ref for introspection endpoints (#58)
         if _sock is not None:
             self._sock = _sock
         else:
