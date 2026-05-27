@@ -116,7 +116,8 @@ jupyter notebook src/mood-model/m0_calibration.ipynb
 - `polar.py` — `to_polar(v, e)` → `(r, theta_deg)`
 - `ewma.py` — `EWMA(alpha)` accumulator with snap-on-first-update and `reset()`
 - `color.py` — `mood_to_rgb(v, e)` → `(r, g, b)` via synaesthesia profile; `apply_confidence(rgb, c)` scales saturation
-- `mood_engine.py` — `MoodEngine(bundle, artist_bundle).update(track_pairs)` → 3 RGB tuples; two-tier lookup (track → artist fallback); confidence scalar applied to saturation; now-pixel persistence across miss polls
+- `mood_engine.py` — `MoodEngine(bundle, artist_bundle).update(track_pairs)` → 3 RGB tuples; two-tier lookup (track → artist fallback); confidence scalar applied to saturation; now-pixel persistence across miss polls; `snapshot()` / `last_poll_outcomes()` / `OUTCOME_FIELDS` expose internal state for HTTP introspection
+- `runtime_state.py` — `RuntimeState` shared object passed from `main.py` (writer) to `ConfigServer` (reader) so introspection endpoints (#58) can read engine + last-poll metadata without circular imports; `snapshot()` returns a JSON-serializable view
 - `miss_log.py` — rolling 1000-entry miss log on flash (`misses.txt`); `append(track_id)`, `all()`, `clear()`
 - `poller.py` — poll timing with exponential back-off; `should_poll()`, `on_success()`, `on_error()`
 - `synaesthesia.py` — colour profile loader (see below)
@@ -128,7 +129,7 @@ jupyter notebook src/mood-model/m0_calibration.ipynb
 - `mdns.py` — `start(hostname)` / `stop()` (mDNS advertisement)
 - `spotify.py` — `auth_url()`, `exchange_code()`, `recently_played()` → `[(track_id, artist_id)]`, `refresh_token()`
 - `config.py` — reads/writes `config.json`; `save(data)` merges, `reload()` refreshes constants
-- `config_server.py` — non-blocking HTTP server; WiFi setup (AP mode) + Spotify OAuth (STA mode); `GET /misses` endpoint
+- `config_server.py` — non-blocking HTTP server; WiFi setup (AP mode) + Spotify OAuth (STA mode); `GET /misses` endpoint; accepts a `state=RuntimeState` kwarg as the hook for introspection endpoints landing in #58
 - `boot.py` — first-boot AP setup, then normal-boot WiFi connect + Spotify OAuth if needed
 - `main.py` — 3-minute poll loop; WDT, gc, active WiFi reconnect, panic guard
 
