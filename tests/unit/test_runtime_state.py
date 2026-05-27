@@ -28,10 +28,11 @@ def _engine_with_t1():
 
 def test_initial_state_is_idle():
     state = RuntimeState()
-    assert state.engine          is None
-    assert state.last_track_ids  == []
-    assert state.last_poll_ms    == 0
-    assert state.last_colors     == [(0, 0, 0), (0, 0, 0), (0, 0, 0)]
+    assert state.engine            is None
+    assert state.last_track_ids    == []
+    assert state.last_poll_ms      == 0
+    assert state.last_colors       == [(0, 0, 0), (0, 0, 0), (0, 0, 0)]
+    assert state.last_mood_colors  is None
 
 
 # ── snapshot() ──────────────────────────────────────────────────────────────
@@ -44,6 +45,7 @@ def test_snapshot_without_engine():
     assert snap["last_track_results"] == []
     assert snap["last_poll_ms"]       == 0
     assert snap["last_colors"]        == [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
+    assert snap["last_mood_colors"]   is None
 
 
 def test_snapshot_with_engine_reflects_engine_snapshot():
@@ -51,9 +53,10 @@ def test_snapshot_with_engine_reflects_engine_snapshot():
     state.engine = _engine_with_t1()
     state.engine.update([("t1", "artist1")])
 
-    state.last_track_ids = ["t1"]
-    state.last_poll_ms   = 12345
-    state.last_colors    = [(10, 20, 30), (40, 50, 60), (70, 80, 90)]
+    state.last_track_ids   = ["t1"]
+    state.last_poll_ms     = 12345
+    state.last_colors      = [(10, 20, 30), (40, 50, 60), (70, 80, 90)]
+    state.last_mood_colors = [(11, 22, 33), (44, 55, 66), (77, 88, 99)]
 
     # Engine stores outcomes as tuples; snapshot rehydrates to dicts at the
     # HTTP boundary so curl users get self-describing JSON.
@@ -67,15 +70,38 @@ def test_snapshot_with_engine_reflects_engine_snapshot():
     assert snap["last_track_results"] == expected_outcomes
     assert snap["last_poll_ms"]       == 12345
     assert snap["last_colors"]        == [[10, 20, 30], [40, 50, 60], [70, 80, 90]]
+    assert snap["last_mood_colors"]   == [[11, 22, 33], [44, 55, 66], [77, 88, 99]]
+
+
+def test_snapshot_last_mood_colors_serialized_as_list_of_lists():
+    """Tuples → lists at the HTTP boundary for clean json round-trip."""
+    state = RuntimeState()
+    state.last_mood_colors = [(1, 2, 3), (4, 5, 6), (7, 8, 9)]
+    snap = state.snapshot()
+    assert snap["last_mood_colors"] == [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+    # Must be lists, not tuples — json.dumps wouldn't care, but equality checks would.
+    assert all(isinstance(c, list) for c in snap["last_mood_colors"])
+
+
+def test_snapshot_last_mood_colors_distinguishes_from_last_colors():
+    """The whole point of the separate field: animator output vs. engine output."""
+    state = RuntimeState()
+    state.last_colors      = [(255, 0, 0), (255, 0, 0), (255, 0, 0)]   # WIFI_LOST red
+    state.last_mood_colors = [(40, 80, 120), (40, 80, 120), (40, 80, 120)]  # actual mood
+    snap = state.snapshot()
+    assert snap["last_colors"]      != snap["last_mood_colors"]
+    assert snap["last_colors"]      == [[255, 0, 0], [255, 0, 0], [255, 0, 0]]
+    assert snap["last_mood_colors"] == [[40, 80, 120], [40, 80, 120], [40, 80, 120]]
 
 
 def test_snapshot_round_trips_through_json():
     state        = RuntimeState()
     state.engine = _engine_with_t1()
     state.engine.update([("t1", "a1"), ("miss", "a2")])
-    state.last_track_ids = ["t1", "miss"]
-    state.last_poll_ms   = 999
-    state.last_colors    = [(1, 2, 3), (4, 5, 6), (7, 8, 9)]
+    state.last_track_ids   = ["t1", "miss"]
+    state.last_poll_ms     = 999
+    state.last_colors      = [(1, 2, 3), (4, 5, 6), (7, 8, 9)]
+    state.last_mood_colors = [(10, 20, 30), (40, 50, 60), (70, 80, 90)]
 
     snap    = state.snapshot()
     decoded = json.loads(json.dumps(snap))

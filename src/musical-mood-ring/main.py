@@ -77,7 +77,6 @@ def main():
 
     state        = RuntimeState()
     state.engine = MoodEngine(bundle, artist_bundle)
-    engine       = state.engine                      # local alias for hot path
     poller       = Poller()
     access_token = None
     expires_at   = 0
@@ -150,10 +149,11 @@ def main():
                     if _blip is None:
                         _blip = ApiErrorBlip(_last_colors)
                 else:
-                    new_colors = engine.update(track_ids)
+                    new_colors = state.engine.update(track_ids)
                     poller.on_success(now_ms)
-                    state.last_track_ids = [tid for tid, _aid in track_ids]
-                    state.last_poll_ms   = now_ms
+                    state.last_track_ids   = [tid for tid, _aid in track_ids]
+                    state.last_poll_ms     = now_ms
+                    state.last_mood_colors = new_colors
 
                     if poller.is_persistent_failure(now_ms):
                         # Graceful degradation — treat as idle, not an error
@@ -179,7 +179,8 @@ def main():
 
         # ── Handoff: startup flare → mood transition ──────────────────────
         if isinstance(animator, StartupFlare) and animator.done:
-            last = engine.update([])   # get current colours without a poll
+            last = state.engine.update([])   # get current colours without a poll
+            state.last_mood_colors = last
             animator = MoodTransition(last, last)
 
         # ── Advance animation and write pixels ────────────────────────────
