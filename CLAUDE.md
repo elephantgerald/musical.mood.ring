@@ -171,6 +171,8 @@ Public API: `hue(theta_deg)`, `saturation_k()`, `brightness_floor()`, `brightnes
 
 **mDNS**: Device advertises as `musical-mood-ring.local`, providing a stable Spotify OAuth redirect URI (`http://musical-mood-ring.local/callback`) regardless of DHCP-assigned IP.
 
+**Config-server security model**: The HTTP config server runs in two modes. Mutating endpoints (`/wifi`, `/spotify/*`) are reachable only in `setup` mode — during first-boot AP setup and during a bounded **setup window** (`_SETUP_GRACE_MS`, 5 min) at the start of every normal boot, after which `main.py` calls `lock_runtime()` and only read-only introspection (`/misses`, #58's endpoints) is served for the rest of uptime. **Accepted risk**: that 5-minute window is *unauthenticated* and runs on the home LAN, so for 5 min after every power-on any LAN host can write config (WiFi creds, Spotify token). This is a deliberate trade-off — the owner is physically present at power-on, exposure is bounded, and the device targets a trusted home network. If the threat model tightens, the hardening path is a flashed shared-secret header on the mutating endpoints (not yet implemented). `SPOTIFY_MOCK_HOST` is flash-only (no HTTP write path) and honoured only for loopback/RFC1918 targets, so it can't be used to downgrade OAuth traffic to cleartext.
+
 **Deployment**: `mpremote` (not ampy) for flashing files to the ESP32. Use `build/reset.sh` to erase and reflash MicroPython itself. Use `build/deploy.sh` to copy firmware and bundles to an already-flashed board:
 
 ```bash
