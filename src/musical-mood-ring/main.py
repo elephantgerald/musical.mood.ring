@@ -60,6 +60,7 @@ except ImportError:
 
 _RECONNECT_INTERVAL_MS = 60_000   # retry WiFi connect every 60 s when lost
 _GC_INTERVAL           = 10       # call gc.collect() every N loop iterations
+_SETUP_GRACE_MS        = 300_000  # 5 min after boot: config endpoints open, then lock to read-only
 
 
 def main():
@@ -79,7 +80,12 @@ def main():
     state        = RuntimeState()
     state.engine = MoodEngine(bundle, artist_bundle)
     poller       = Poller()
-    cfg_server   = ConfigServer(mode="runtime", state=state)
+    # Open the config server in setup mode for a bounded window after boot, then
+    # lock it to read-only runtime. The owner is physically present right after
+    # power-on, so this is when re-configuration (Spotify OAuth, mock host) is
+    # legitimate; for the rest of the device's uptime only read-only endpoints
+    # are served. See ConfigServer.lock_runtime() and _SETUP_GRACE_MS.
+    cfg_server   = ConfigServer(mode="setup", state=state)
     access_token = None
     expires_at   = 0
 
@@ -97,6 +103,7 @@ def main():
     _wdt = _machine.WDT(timeout=8000) if _HW else None
 
     prev_ms = _now_ms()
+    _setup_deadline = prev_ms + _SETUP_GRACE_MS   # lock config server to read-only after this
     pixel.write([(0, 16, 0)] * 3)   # dim green: ready
 
     while True:
@@ -107,6 +114,8 @@ def main():
         # ── Housekeeping ─────────────────────────────────────────────────
         if _wdt:
             _wdt.feed()
+        if now_ms >= _setup_deadline:
+            cfg_server.lock_runtime()   # one-way; idempotent
         cfg_server.step()
         _loop_count += 1
         if _loop_count % _GC_INTERVAL == 0:

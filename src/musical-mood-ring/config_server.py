@@ -195,6 +195,15 @@ class ConfigServer:
             except Exception:
                 pass
 
+    def lock_runtime(self):
+        """Permanently drop to runtime mode — one-way, read-only thereafter.
+
+        main.py calls this once its boot setup window expires. After this,
+        only _RUNTIME_ENDPOINTS are routed; every mutating endpoint 403s.
+        Idempotent: safe to call every loop iteration.
+        """
+        self._mode = "runtime"
+
     def stop(self):
         """Close the server socket and signal done."""
         self.done = True
@@ -311,7 +320,9 @@ class ConfigServer:
         conn.send(_HTML_SPOTIFY_SUCCESS.encode())
         config.save({"spotify_refresh_token": refresh_token})
         config.reload()
-        self.done = True  # boot.py exits the loop and falls through to main.py
+        # No done=True: same rationale as _handle_spotify_token. (In practice
+        # this device-side callback is vestigial — Spotify blocks the device's
+        # redirect URI, so tokens arrive via the PC helper's /spotify/token.)
 
     def _handle_spotify_token(self, conn, body):
         """Accept a pre-obtained refresh token from the PC-side OAuth helper."""
@@ -322,7 +333,10 @@ class ConfigServer:
         conn.send(b"HTTP/1.0 200 OK\r\n\r\nOK")
         config.save({"spotify_refresh_token": token})
         config.reload()
-        self.done = True  # boot.py exits the setup loop and falls through to main.py
+        # No done=True: this runs inside main.py's live loop during the boot
+        # setup window. main.py picks up the token on its next poll and keeps
+        # serving read-only introspection. The grace timer governs the
+        # setup→runtime transition, not this handler.
 
     def _handle_misses(self, conn):
         """Return the miss log as plain text (one track ID per line)."""

@@ -14,11 +14,11 @@ Usage:
 
 Prerequisites:
     - http://127.0.0.1:8888/callback registered in your Spotify app dashboard
-    - Device in SETUP mode (boot.py serving the config server) with WiFi and
-      Spotify credentials already saved (SPOTIFY_CLIENT_ID + SPOTIFY_CLIENT_SECRET).
-      POST /spotify/token is a setup-only endpoint — it returns 403 once the
-      device has dropped into the normal runtime poll loop, so re-auth means
-      re-entering setup, not hitting a live device.
+    - Run this within the device's boot SETUP WINDOW — the first ~5 minutes
+      after power-on, while WiFi + Spotify credentials are already saved
+      (SPOTIFY_CLIENT_ID + SPOTIFY_CLIENT_SECRET). POST /spotify/token returns
+      403 once that window closes and the device locks to read-only runtime,
+      so re-auth means power-cycling the board and acting within the window.
 
 Environment variables (optional — prompted if absent):
     SPOTIFY_CLIENT_ID

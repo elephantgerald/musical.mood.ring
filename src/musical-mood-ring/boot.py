@@ -11,8 +11,9 @@
 #
 #   Normal-boot (wifi_ssid present):
 #     Connect to WiFi with a CONNECTING animation; on success start mDNS
-#     and hand off to main.py immediately. main.py runs the config server
-#     in its loop for ongoing re-configuration (Spotify token, mock host, etc.).
+#     and hand off to main.py. main.py serves the config server in setup mode
+#     for a bounded window after boot (Spotify OAuth, mock host) and then locks
+#     it to read-only runtime for the rest of the device's uptime.
 
 import config
 import pixel
@@ -65,7 +66,7 @@ else:
         success = BootStatus(BootStatus.SUCCESS)
         pixel.write(success.step(0))
         _sleep_ms(BootStatus._SUCCESS_MS)
-        # Fall through — main.py runs the config server in its loop
+        # Fall through — main.py serves the config server (setup window → lock)
 
     else:
         error = ErrorIndicator(ErrorIndicator.WIFI_LOST)
