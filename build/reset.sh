@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# build/reset.sh — Erase and reflash the HUZZAH32 with the latest MicroPython
+# build/reset.sh — Erase and reflash an ESP32 board with the latest MicroPython
 #
 # Usage:
-#   ./build/reset.sh
+#   ./build/reset.sh [--chip esp32|esp32c3]
+#
+# Supported boards:
+#   esp32    — Adafruit HUZZAH32 (CP210x, /dev/ttyUSB0, offset 0x1000)  [default]
+#   esp32c3  — Seeed XIAO ESP32-C3 (native USB CDC, /dev/ttyACM0, offset 0x0)
 #
 # First-time WSL2 setup (one-off, already done if you followed the guide):
 #   sudo apt install linux-tools-generic hwdata
@@ -14,19 +18,27 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+FIRMWARE_DIR="$REPO_ROOT/build/firmware"
+
+# ── Defaults (HUZZAH32) ────────────────────────────────────────────────────
 CHIP=esp32
 PORT=/dev/ttyUSB0
-FIRMWARE_DIR="$REPO_ROOT/build/firmware"
+MODULE=cp210x
+FW_PREFIX=ESP32_GENERIC
+FLASH_OFFSET=0x1000
 
 # ── Help ──────────────────────────────────────────────────────────────────
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-    echo "Usage: ./build/reset.sh [--help]"
+    echo "Usage: ./build/reset.sh [--chip esp32|esp32c3] [--help]"
     echo ""
-    echo "Erases and reflashes the HUZZAH32 ESP32 with the latest stable MicroPython."
+    echo "Erases and reflashes an ESP32 board with the latest stable MicroPython."
+    echo ""
+    echo "  --chip esp32    Adafruit HUZZAH32   (/dev/ttyUSB0,  CP210x,      offset 0x1000)  [default]"
+    echo "  --chip esp32c3  Seeed XIAO ESP32-C3 (/dev/ttyACM0,  native USB,  offset 0x0)"
     echo ""
     echo "What it does:"
     echo "  1. Activates .venv and checks prerequisites (esptool, mpremote, curl)"
-    echo "  2. Detects the board at $PORT — prompts for usbipd attach if not found"
+    echo "  2. Detects the board — prompts for usbipd attach if not found"
     echo "  3. Fetches the latest MicroPython release from GitHub; downloads if not cached"
     echo "  4. Erases flash and writes the firmware"
     echo "  5. Verifies the board responds with the expected MicroPython version"
@@ -36,6 +48,35 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     echo "First-time WSL2 setup: see comments at the top of this file."
     exit 0
 fi
+
+# ── Parse arguments ────────────────────────────────────────────────────────
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --chip)
+            shift
+            case "${1:-}" in
+                esp32)
+                    CHIP=esp32; PORT=/dev/ttyUSB0; MODULE=cp210x
+                    FW_PREFIX=ESP32_GENERIC; FLASH_OFFSET=0x1000
+                    ;;
+                esp32c3)
+                    CHIP=esp32c3; PORT=/dev/ttyACM0; MODULE=cdc_acm
+                    FW_PREFIX=ESP32_GENERIC_C3; FLASH_OFFSET=0x0
+                    ;;
+                *)
+                    echo "Unknown chip: '${1:-}'  (choose esp32 or esp32c3)"
+                    exit 1
+                    ;;
+            esac
+            ;;
+        --help|-h) ;;  # handled above
+        *)
+            echo "Unknown option: $1  (try --help)"
+            exit 1
+            ;;
+    esac
+    shift
+done
 
 # ── Activate .venv ─────────────────────────────────────────────────────────
 VENV="$REPO_ROOT/.venv"
@@ -65,7 +106,7 @@ check_cmd curl
 check_cmd python3
 
 # ── Board detection ────────────────────────────────────────────────────────
-sudo modprobe cp210x 2>/dev/null || true
+sudo modprobe "$MODULE" 2>/dev/null || true
 
 if [ ! -e "$PORT" ]; then
     echo ""
@@ -74,7 +115,11 @@ if [ ! -e "$PORT" ]; then
     echo "  Attach the board from an Administrator PowerShell on Windows:"
     echo ""
     echo "    usbipd list"
-    echo "    usbipd attach --wsl --busid <BUSID>   # look for CP210x / Silicon Labs"
+    if [[ "$CHIP" == "esp32c3" ]]; then
+        echo "    usbipd attach --wsl --busid <BUSID>   # look for USB JTAG/serial debug unit (303a:1001)"
+    else
+        echo "    usbipd attach --wsl --busid <BUSID>   # look for CP210x / Silicon Labs"
+    fi
     echo ""
     printf "  Press Enter once attached... "
     read -r
@@ -86,7 +131,7 @@ if [ ! -e "$PORT" ]; then
     if [ ! -e "$PORT" ]; then
         echo ""
         echo "ERROR: $PORT still not found after 15 seconds."
-        echo "       Check that usbipd attached successfully and the CP210x driver is loaded."
+        echo "       Check that usbipd attached successfully and the $MODULE driver is loaded."
         exit 1
     fi
 fi
@@ -101,14 +146,14 @@ LATEST_VERSION="${LATEST_TAG#v}"
 echo "Latest stable: v${LATEST_VERSION}"
 
 mkdir -p "$FIRMWARE_DIR"
-FIRMWARE=$(ls "$FIRMWARE_DIR"/ESP32_GENERIC-*-v${LATEST_VERSION}.bin 2>/dev/null | head -1 || true)
+FIRMWARE=$(ls "$FIRMWARE_DIR"/${FW_PREFIX}-*-v${LATEST_VERSION}.bin 2>/dev/null | head -1 || true)
 
 if [ -n "$FIRMWARE" ]; then
     echo "Cached firmware: $(basename "$FIRMWARE")"
 else
-    echo "Downloading MicroPython v${LATEST_VERSION}..."
-    DOWNLOAD_PATH=$(curl -s https://micropython.org/download/ESP32_GENERIC/ \
-        | grep -o 'href="[^"]*ESP32_GENERIC[^"]*v'"${LATEST_VERSION}"'[^"]*\.bin"' \
+    echo "Downloading MicroPython v${LATEST_VERSION} for ${FW_PREFIX}..."
+    DOWNLOAD_PATH=$(curl -s "https://micropython.org/download/${FW_PREFIX}/" \
+        | grep -o 'href="[^"]*'"${FW_PREFIX}"'[^"]*v'"${LATEST_VERSION}"'[^"]*\.bin"' \
         | grep -v preview \
         | head -1 \
         | sed 's/href="//;s/"//')
@@ -130,7 +175,7 @@ echo "Erasing flash..."
 esptool --chip "$CHIP" --port "$PORT" erase-flash
 
 echo "Flashing $(basename "$FIRMWARE")..."
-esptool --chip "$CHIP" --port "$PORT" --baud 460800 write-flash -z 0x1000 "$FIRMWARE"
+esptool --chip "$CHIP" --port "$PORT" --baud 460800 write-flash -z "$FLASH_OFFSET" "$FIRMWARE"
 
 # ── Verify ─────────────────────────────────────────────────────────────────
 echo ""

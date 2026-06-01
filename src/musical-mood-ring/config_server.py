@@ -10,14 +10,28 @@
 #
 #   Phase 2 — Spotify OAuth (STA mode, after WiFi is configured):
 #     GET  /                      → Spotify credentials form (if not saved yet)
-#                                   or "Authorize" button (if creds saved)
+#                                   or PC-script instructions (if creds saved)
 #     POST /spotify/credentials   → save client_id + secret, reload, redirect to /
 #     GET  /spotify/auth          → 302 redirect to Spotify authorization URL
 #     GET  /callback              → exchange code, save refresh token, done
+#     POST /spotify/token         → accept pre-obtained refresh token from PC-side
+#                                   OAuth helper (build/spotify_auth.py); saves and
+#                                   signals done. Used because Spotify blocks non-HTTPS
+#                                   redirect URIs for non-localhost hosts.
 #
-#   Utility endpoints (always available in main loop):
+#   Read-only endpoints (also served in runtime mode from main.py's loop):
 #     GET  /misses                → plain-text list of unrecognised track IDs
 #                                   (one per line; pipe into cultivator pipeline)
+#
+# Lifecycle / security:
+#   The server runs in one of two modes (see __init__):
+#     mode="setup"   — boot.py, time-bounded by setup completion. ALL endpoints
+#                      above are routed, including the config-mutating POSTs.
+#     mode="runtime" — main.py, always-on for the device's full uptime. Only the
+#                      read-only allowlist (_RUNTIME_ENDPOINTS) is routed; every
+#                      mutating/setup endpoint returns 403. This is the security
+#                      boundary that keeps the always-on server from exposing
+#                      /wifi, /spotify/* writes to any LAN host indefinitely.
 #
 # The server sets done=True when setup is complete or the 5-min timer fires.
 # Caller drives the loop: while not server.done: server.step(); animate; sleep
@@ -85,8 +99,7 @@ _HTML_SPOTIFY_CREDS_FORM = (
     "<body><h2>Spotify Setup</h2>"
     "<p>Enter your Spotify app credentials. "
     "<a href=https://developer.spotify.com/dashboard target=_blank>Create an app</a>"
-    " and set the redirect URI to "
-    "<code>http://musical-mood-ring.local/callback</code>.</p>"
+    " and add <code>http://127.0.0.1:8888/callback</code> as a redirect URI.</p>"
     "<form method=post action=/spotify/credentials>"
     "<label>Client ID<br>"
     "<input name=client_id type=text autocomplete=off></label>"
@@ -99,8 +112,13 @@ _HTML_SPOTIFY_CREDS_FORM = (
 _HTML_SPOTIFY_AUTHORIZE = (
     _HEAD + "<title>musical.mood.ring — Authorize</title>" + _STYLE + "</head>"
     "<body><h2>Authorize Spotify</h2>"
-    "<p>App credentials saved. Click below to grant this device access.</p>"
-    "<a href=/spotify/auth class='btn green'>Authorize with Spotify</a>"
+    "<p>Credentials saved. On your PC, run:</p>"
+    "<pre style='background:#f4f4f4;padding:.8em;overflow-x:auto'>"
+    "python build/spotify_auth.py</pre>"
+    "<p>If <code>musical-mood-ring.local</code> does not resolve, pass your device IP:</p>"
+    "<pre style='background:#f4f4f4;padding:.8em;overflow-x:auto'>"
+    "python build/spotify_auth.py 10.0.0.xx</pre>"
+    "<p>The device will start automatically once authorized.</p>"
     "</body></html>"
 )
 
@@ -120,6 +138,15 @@ _HTML_SPOTIFY_ERROR = (
 )
 
 _HTML_404 = "HTTP/1.0 404 Not Found\r\n\r\n"
+_HTML_403 = "HTTP/1.0 403 Forbidden\r\n\r\nConfiguration endpoints are disabled at runtime."
+
+# (method, path) tuples reachable while the device runs normally (mode="runtime").
+# Read-only only — anything that mutates config must be a setup-mode action so an
+# always-on LAN server can't be used to rewrite credentials or redirect traffic.
+# #58's introspection endpoints (/state, /pixels, /poll-log) join this set.
+_RUNTIME_ENDPOINTS = {
+    ("GET", "/misses"),
+}
 
 
 # ── ConfigServer ─────────────────────────────────────────────────────────────
@@ -128,11 +155,16 @@ class ConfigServer:
     """
     Non-blocking HTTP config server.
 
+    mode:  "setup"   — boot.py: all endpoints routed (time-bounded by setup).
+           "runtime" — main.py: only _RUNTIME_ENDPOINTS routed; mutating
+                       endpoints return 403. See module docstring.
+
     Pass _sock for testing (dependency injection); omit to use a real socket.
     """
 
-    def __init__(self, host="0.0.0.0", port=80, state=None, _sock=None):
+    def __init__(self, host="0.0.0.0", port=80, mode="setup", state=None, _sock=None):
         self.done   = False
+        self._mode  = mode
         self._state = state   # RuntimeState ref for introspection endpoints (#58)
         if _sock is not None:
             self._sock = _sock
@@ -152,6 +184,7 @@ class ConfigServer:
         except OSError:
             return  # no connection waiting — normal in non-blocking mode
         try:
+            conn.settimeout(2.0)   # don't block WDT on slow or probe connections
             raw = conn.recv(1024).decode("utf-8", "ignore")
             self._dispatch(conn, raw)
         except Exception:
@@ -161,6 +194,15 @@ class ConfigServer:
                 conn.close()
             except Exception:
                 pass
+
+    def lock_runtime(self):
+        """Permanently drop to runtime mode — one-way, read-only thereafter.
+
+        main.py calls this once its boot setup window expires. After this,
+        only _RUNTIME_ENDPOINTS are routed; every mutating endpoint 403s.
+        Idempotent: safe to call every loop iteration.
+        """
+        self._mode = "runtime"
 
     def stop(self):
         """Close the server socket and signal done."""
@@ -185,6 +227,11 @@ class ConfigServer:
         path    = path_qs.split("?")[0]
         query   = path_qs.split("?")[1] if "?" in path_qs else ""
 
+        # Security boundary: in runtime mode, only read-only endpoints are reachable.
+        if self._mode == "runtime" and (method, path) not in _RUNTIME_ENDPOINTS:
+            conn.send(_HTML_403.encode())
+            return
+
         if method == "GET" and path == "/":
             self._handle_root(conn)
         elif method == "POST" and path == "/wifi":
@@ -195,6 +242,8 @@ class ConfigServer:
             self._handle_spotify_auth(conn)
         elif method == "GET" and path == "/callback":
             self._handle_spotify_callback(conn, _parse_form(query))
+        elif method == "POST" and path == "/spotify/token":
+            self._handle_spotify_token(conn, _extract_body(raw))
         elif method == "GET" and path == "/misses":
             self._handle_misses(conn)
         else:
@@ -271,7 +320,23 @@ class ConfigServer:
         conn.send(_HTML_SPOTIFY_SUCCESS.encode())
         config.save({"spotify_refresh_token": refresh_token})
         config.reload()
-        self.done = True  # boot.py exits the loop and falls through to main.py
+        # No done=True: same rationale as _handle_spotify_token. (In practice
+        # this device-side callback is vestigial — Spotify blocks the device's
+        # redirect URI, so tokens arrive via the PC helper's /spotify/token.)
+
+    def _handle_spotify_token(self, conn, body):
+        """Accept a pre-obtained refresh token from the PC-side OAuth helper."""
+        token = _parse_form(body).get("refresh_token", "").strip()
+        if not token:
+            conn.send(b"HTTP/1.0 400 Bad Request\r\n\r\nMissing refresh_token")
+            return
+        conn.send(b"HTTP/1.0 200 OK\r\n\r\nOK")
+        config.save({"spotify_refresh_token": token})
+        config.reload()
+        # No done=True: this runs inside main.py's live loop during the boot
+        # setup window. main.py picks up the token on its next poll and keeps
+        # serving read-only introspection. The grace timer governs the
+        # setup→runtime transition, not this handler.
 
     def _handle_misses(self, conn):
         """Return the miss log as plain text (one track ID per line)."""

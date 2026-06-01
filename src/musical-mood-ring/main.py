@@ -31,6 +31,7 @@ import config
 import pixel
 import spotify
 import wifi
+from config_server import ConfigServer
 from mmar          import load as mmar_load
 from mood_engine   import MoodEngine
 from poller        import Poller
@@ -59,6 +60,7 @@ except ImportError:
 
 _RECONNECT_INTERVAL_MS = 60_000   # retry WiFi connect every 60 s when lost
 _GC_INTERVAL           = 10       # call gc.collect() every N loop iterations
+_SETUP_GRACE_MS        = 300_000  # 5 min after boot: config endpoints open, then lock to read-only
 
 
 def main():
@@ -78,6 +80,12 @@ def main():
     state        = RuntimeState()
     state.engine = MoodEngine(bundle, artist_bundle)
     poller       = Poller()
+    # Open the config server in setup mode for a bounded window after boot, then
+    # lock it to read-only runtime. The owner is physically present right after
+    # power-on, so this is when re-configuration (Spotify OAuth, mock host) is
+    # legitimate; for the rest of the device's uptime only read-only endpoints
+    # are served. See ConfigServer.lock_runtime() and _SETUP_GRACE_MS.
+    cfg_server   = ConfigServer(mode="setup", state=state)
     access_token = None
     expires_at   = 0
 
@@ -95,6 +103,7 @@ def main():
     _wdt = _machine.WDT(timeout=8000) if _HW else None
 
     prev_ms = _now_ms()
+    _setup_deadline = prev_ms + _SETUP_GRACE_MS   # lock config server to read-only after this
     pixel.write([(0, 16, 0)] * 3)   # dim green: ready
 
     while True:
@@ -105,6 +114,9 @@ def main():
         # ── Housekeeping ─────────────────────────────────────────────────
         if _wdt:
             _wdt.feed()
+        if now_ms >= _setup_deadline:
+            cfg_server.lock_runtime()   # one-way; idempotent
+        cfg_server.step()
         _loop_count += 1
         if _loop_count % _GC_INTERVAL == 0:
             gc.collect()
@@ -125,7 +137,7 @@ def main():
             in_idle    = True
 
         # ── Poll ──────────────────────────────────────────────────────────
-        if error_mode is None and poller.should_poll(now_ms):
+        if error_mode is None and config.SPOTIFY_REFRESH_TOKEN and poller.should_poll(now_ms):
             # Refresh access token when absent or near expiry
             if access_token is None or now_ms >= expires_at:
                 token, expires_in = spotify.refresh_token(
@@ -140,6 +152,8 @@ def main():
                     animator   = ErrorIndicator(ErrorIndicator.AUTH_FAIL)
                     error_mode = ErrorIndicator.AUTH_FAIL
                     poller.on_error(now_ms)
+                if _wdt:
+                    _wdt.feed()   # token call may have consumed several seconds
 
             if access_token and error_mode is None:
                 track_ids = spotify.recently_played(access_token)

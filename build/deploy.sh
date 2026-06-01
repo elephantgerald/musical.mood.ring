@@ -5,6 +5,7 @@
 #   ./build/deploy.sh [options]
 #
 # Options:
+#   --chip esp32|esp32c3  Board variant (default: esp32)
 #   --project mood.ring   Full mood ring firmware + data bundles (default)
 #   --project twinkle     Twinkle hardware test (overwrites boot.py + main.py)
 #   --firmware-only       mood.ring only: copy .py files, skip bundles
@@ -17,10 +18,14 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PORT=/dev/ttyUSB0
 FIRMWARE_SRC="$REPO_ROOT/src/musical-mood-ring"
 BUNDLE_DIR="$REPO_ROOT/data/musical-memory-bundle"
 SYNTH_DIR="$REPO_ROOT/data/synaesthesia"
+
+# ── Defaults (HUZZAH32) ────────────────────────────────────────────────────
+CHIP=esp32
+PORT=/dev/ttyUSB0
+MODULE=cp210x
 
 PROJECT=mood.ring
 DO_FIRMWARE=true
@@ -33,6 +38,8 @@ while [[ $# -gt 0 ]]; do
         --help|-h)
             echo "Usage: ./build/deploy.sh [options]"
             echo ""
+            echo "  --chip esp32    Adafruit HUZZAH32   (/dev/ttyUSB0)  [default]"
+            echo "  --chip esp32c3  Seeed XIAO ESP32-C3 (/dev/ttyACM0)"
             echo "  --project mood.ring   Full mood ring: .py firmware + bundles (default)"
             echo "  --project twinkle     Hardware test: test_boot.py + twinkle_test.py"
             echo "  --project whitenoise  Hardware test: test_boot.py + whitenoise_test.py"
@@ -41,9 +48,19 @@ while [[ $# -gt 0 ]]; do
             echo "  --bundles-only        mood.ring only: bundles only, skip .py files"
             echo "  --no-reset            Skip board reset after deploying"
             echo ""
-            echo "Deploys to the ESP32 at $PORT."
-            echo "Run ./build/reset.sh first if the board is stuck or needs MicroPython reflashed."
+            echo "Run ./build/reset.sh --chip <chip> first if the board needs MicroPython reflashed."
             exit 0
+            ;;
+        --chip)
+            shift
+            case "${1:-}" in
+                esp32)   CHIP=esp32;   PORT=/dev/ttyUSB0; MODULE=cp210x  ;;
+                esp32c3) CHIP=esp32c3; PORT=/dev/ttyACM0; MODULE=cdc_acm ;;
+                *)
+                    echo "Unknown chip: '${1:-}'  (choose esp32 or esp32c3)"
+                    exit 1
+                    ;;
+            esac
             ;;
         --project)
             shift
@@ -88,7 +105,7 @@ if ! command -v mpremote &>/dev/null; then
 fi
 
 # ── Board detection ──────────────────────────────────────────────────────────
-sudo modprobe cp210x 2>/dev/null || true
+sudo modprobe "$MODULE" 2>/dev/null || true
 
 if [ ! -e "$PORT" ]; then
     echo ""
@@ -97,7 +114,11 @@ if [ ! -e "$PORT" ]; then
     echo "  Attach the board from an Administrator PowerShell on Windows:"
     echo ""
     echo "    usbipd list"
-    echo "    usbipd attach --wsl --busid <BUSID>   # look for CP210x / Silicon Labs"
+    if [[ "$CHIP" == "esp32c3" ]]; then
+        echo "    usbipd attach --wsl --busid <BUSID>   # look for USB JTAG/serial debug unit (303a:1001)"
+    else
+        echo "    usbipd attach --wsl --busid <BUSID>   # look for CP210x / Silicon Labs"
+    fi
     echo ""
     printf "  Press Enter once attached... "
     read -r

@@ -19,6 +19,7 @@ _DEFAULTS = {
     "spotify_client_id":      "",
     "spotify_client_secret":  "",
     "spotify_refresh_token":  "",
+    "spotify_mock_host":      "",  # e.g. "10.0.0.21:5000" — points firmware at musical-radio-station
 }
 
 try:
@@ -37,6 +38,7 @@ WIFI_PASSWORD         = get("wifi_password")
 SPOTIFY_CLIENT_ID     = get("spotify_client_id")
 SPOTIFY_CLIENT_SECRET = get("spotify_client_secret")
 SPOTIFY_REFRESH_TOKEN = get("spotify_refresh_token")
+SPOTIFY_MOCK_HOST     = get("spotify_mock_host")
 
 
 def save(data):
@@ -56,7 +58,7 @@ def reload():
     """Re-read config.json from flash and update module-level constants."""
     global _cfg
     global WIFI_SSID, WIFI_PASSWORD
-    global SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_REFRESH_TOKEN
+    global SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_REFRESH_TOKEN, SPOTIFY_MOCK_HOST
     try:
         with open(_PATH) as f:
             _cfg = json.load(f)
@@ -67,3 +69,4 @@ def reload():
     SPOTIFY_CLIENT_ID     = get("spotify_client_id")
     SPOTIFY_CLIENT_SECRET = get("spotify_client_secret")
     SPOTIFY_REFRESH_TOKEN = get("spotify_refresh_token")
+    SPOTIFY_MOCK_HOST     = get("spotify_mock_host")

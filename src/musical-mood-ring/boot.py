@@ -7,11 +7,13 @@
 #
 #   First-boot (no wifi_ssid in config):
 #     Bring up AP, serve the config web page, wait for the user to submit
-#     WiFi credentials (or the 5-minute window to expire), then reboot.
+#     WiFi credentials, then reboot.
 #
 #   Normal-boot (wifi_ssid present):
 #     Connect to WiFi with a CONNECTING animation; on success start mDNS
-#     and hand off to main.py. On failure pulse dim red indefinitely.
+#     and hand off to main.py. main.py serves the config server in setup mode
+#     for a bounded window after boot (Spotify OAuth, mock host) and then locks
+#     it to read-only runtime for the rest of the device's uptime.
 
 import config
 import pixel
@@ -43,13 +45,6 @@ if not config.WIFI_SSID:
     server   = ConfigServer()
     animator = BootStatus(BootStatus.CONFIG_WAIT)
 
-    # 5-minute ONE_SHOT timer — stops the server when the config window expires
-    if _HW:
-        def _timeout_cb(t):
-            server.stop()
-        _timer = machine.Timer(0)
-        _timer.init(mode=machine.Timer.ONE_SHOT, period=300_000, callback=_timeout_cb)
-
     while not server.done:
         server.step()
         pixel.write(animator.step(FRAME_MS))
@@ -59,7 +54,7 @@ if not config.WIFI_SSID:
     _reset()   # reboots into normal-boot with the saved config
 
 else:
-    # ── Normal-boot: connect to WiFi ─────────────────────────────────────────
+    # ── Normal-boot: connect to WiFi then fall through to main.py ────────────
 
     animator = BootStatus(BootStatus.CONNECTING)
     pixel.write(animator.step(0))   # show first frame immediately
@@ -71,28 +66,8 @@ else:
         success = BootStatus(BootStatus.SUCCESS)
         pixel.write(success.step(0))
         _sleep_ms(BootStatus._SUCCESS_MS)
+        # Fall through — main.py serves the config server (setup window → lock)
 
-        # ── Spotify setup (if no refresh token yet) ──────────────────────
-        if not config.SPOTIFY_REFRESH_TOKEN:
-            from config_server import ConfigServer
-            server   = ConfigServer()
-            animator = BootStatus(BootStatus.CONFIG_WAIT)
-            if _HW:
-                def _spotify_timeout_cb(t):
-                    server.stop()
-                _stimer = machine.Timer(0)
-                _stimer.init(
-                    mode=machine.Timer.ONE_SHOT,
-                    period=300_000,
-                    callback=_spotify_timeout_cb,
-                )
-            while not server.done:
-                server.step()
-                pixel.write(animator.step(FRAME_MS))
-                _sleep_ms(FRAME_MS)
-            config.reload()   # pick up refresh_token if OAuth completed
-
-        # Fall through — MicroPython runs main.py next
     else:
         error = ErrorIndicator(ErrorIndicator.WIFI_LOST)
         while True:

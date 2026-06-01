@@ -122,7 +122,7 @@ def test_get_root_spotify_creds_set_shows_authorize(monkeypatch):
     conn = MagicMock()
     server._dispatch(conn, "GET / HTTP/1.1\r\n\r\n")
     body = conn.send.call_args[0][0].decode()
-    assert "/spotify/auth" in body
+    assert "spotify_auth.py" in body
 
 
 # ── POST /spotify/credentials ────────────────────────────────────────────────
@@ -175,7 +175,7 @@ def test_get_spotify_auth_no_client_id_shows_creds_form(monkeypatch):
 
 # ── GET /callback ─────────────────────────────────────────────────────────────
 
-def test_callback_success_saves_token_and_sets_done(monkeypatch):
+def test_callback_success_saves_token_without_stopping_server(monkeypatch):
     saved = {}
     monkeypatch.setattr(config_server.config, "SPOTIFY_CLIENT_ID",     "cid")
     monkeypatch.setattr(config_server.config, "SPOTIFY_CLIENT_SECRET", "csec")
@@ -187,7 +187,9 @@ def test_callback_success_saves_token_and_sets_done(monkeypatch):
     conn = MagicMock()
     server._dispatch(conn, "GET /callback?code=AUTHCODE HTTP/1.1\r\n\r\n")
     assert saved.get("spotify_refresh_token") == "ref_tok"
-    assert server.done
+    # Must NOT stop the server: it runs inside main.py's live loop during the
+    # boot setup window. The grace timer governs setup→runtime, not this handler.
+    assert not server.done
 
 
 def test_callback_error_param_shows_error_page(monkeypatch):
@@ -219,6 +221,138 @@ def test_callback_exchange_fails_shows_error_page(monkeypatch):
     body = conn.send.call_args[0][0].decode()
     assert "fail" in body.lower() or "error" in body.lower()
     assert not server.done
+
+
+# ── POST /spotify/token ───────────────────────────────────────────────────────
+
+def test_post_spotify_token_saves_and_returns_200(monkeypatch):
+    saved = {}
+    monkeypatch.setattr(config_server.config, "save",   lambda d: saved.update(d))
+    monkeypatch.setattr(config_server.config, "reload", lambda: None)
+    server = _make_server()
+    conn = MagicMock()
+    server._dispatch(conn, "POST /spotify/token HTTP/1.1\r\n\r\nrefresh_token=tok123")
+    assert saved.get("spotify_refresh_token") == "tok123"
+    # Must NOT stop the server: it keeps serving read-only introspection after
+    # the token lands. The boot setup-window timer governs setup→runtime.
+    assert not server.done
+    assert "200" in conn.send.call_args[0][0].decode()
+
+
+def test_post_spotify_token_missing_token_returns_400(monkeypatch):
+    server = _make_server()
+    conn = MagicMock()
+    server._dispatch(conn, "POST /spotify/token HTTP/1.1\r\n\r\nrefresh_token=")
+    assert "400" in conn.send.call_args[0][0].decode()
+    assert not server.done
+
+
+# ── POST /config removed — no arbitrary-key write endpoint exists (C1) ───────
+
+def test_post_config_route_is_404():
+    """The arbitrary-key /config endpoint was removed. Setup mode must not route it."""
+    server = _make_server()
+    conn = MagicMock()
+    server._dispatch(conn, "POST /config HTTP/1.1\r\n\r\nspotify_mock_host=evil%3A80")
+    assert "404" in conn.send.call_args[0][0].decode()
+
+
+# ── Runtime-mode security gate (C1 / I1) ─────────────────────────────────────
+
+def _runtime_server():
+    return ConfigServer(mode="runtime", _sock=_mock_sock())
+
+
+def test_runtime_mode_blocks_post_wifi(monkeypatch):
+    saved = {}
+    monkeypatch.setattr(config_server.config, "save", lambda d: saved.update(d))
+    server = _runtime_server()
+    conn = MagicMock()
+    server._dispatch(conn, "POST /wifi HTTP/1.1\r\n\r\nssid=Net&password=pw")
+    assert "403" in conn.send.call_args[0][0].decode()
+    assert saved == {}            # nothing written
+    assert not server.done
+
+
+def test_runtime_mode_blocks_spotify_token(monkeypatch):
+    saved = {}
+    monkeypatch.setattr(config_server.config, "save", lambda d: saved.update(d))
+    monkeypatch.setattr(config_server.config, "reload", lambda: None)
+    server = _runtime_server()
+    conn = MagicMock()
+    server._dispatch(conn, "POST /spotify/token HTTP/1.1\r\n\r\nrefresh_token=attacker")
+    assert "403" in conn.send.call_args[0][0].decode()
+    assert saved == {}            # token not written
+    assert not server.done
+
+
+def test_runtime_mode_blocks_spotify_credentials(monkeypatch):
+    saved = {}
+    monkeypatch.setattr(config_server.config, "save", lambda d: saved.update(d))
+    server = _runtime_server()
+    conn = MagicMock()
+    server._dispatch(conn, "POST /spotify/credentials HTTP/1.1\r\n\r\nclient_id=x&client_secret=y")
+    assert "403" in conn.send.call_args[0][0].decode()
+    assert saved == {}
+
+
+def test_runtime_mode_blocks_root_page():
+    """The setup home page leaks config state — not served at runtime."""
+    server = _runtime_server()
+    conn = MagicMock()
+    server._dispatch(conn, "GET / HTTP/1.1\r\n\r\n")
+    assert "403" in conn.send.call_args[0][0].decode()
+
+
+def test_runtime_mode_allows_misses(monkeypatch):
+    """Read-only introspection stays available at runtime."""
+    monkeypatch.setattr(config_server.miss_log, "all", lambda: ["abc", "def"])
+    server = _runtime_server()
+    conn = MagicMock()
+    server._dispatch(conn, "GET /misses HTTP/1.1\r\n\r\n")
+    body = conn.send.call_args[0][0].decode()
+    assert "abc" in body and "def" in body
+
+
+def test_setup_mode_allows_post_wifi(monkeypatch):
+    """Setup mode (default) still routes mutating endpoints — gate is runtime-only."""
+    monkeypatch.setattr(config_server.wifi, "try_connect", lambda s, p: None)
+    server = _make_server()
+    conn = MagicMock()
+    server._dispatch(conn, "POST /wifi HTTP/1.1\r\n\r\nssid=BadNet&password=wrong")
+    # Reaches the handler (shows form error), not the 403 gate.
+    assert "403" not in conn.send.call_args[0][0].decode()
+
+
+# ── lock_runtime() — one-way setup→runtime flip (boot setup window) ──────────
+
+def test_lock_runtime_closes_the_setup_window(monkeypatch):
+    """After lock_runtime(), a previously-allowed mutating endpoint 403s."""
+    monkeypatch.setattr(config_server.config, "save", lambda d: None)
+    monkeypatch.setattr(config_server.config, "reload", lambda: None)
+    server = _make_server()   # default setup mode
+
+    # Before lock: /spotify/token reaches the handler (200).
+    conn = MagicMock()
+    server._dispatch(conn, "POST /spotify/token HTTP/1.1\r\n\r\nrefresh_token=tok")
+    assert "200" in conn.send.call_args[0][0].decode()
+
+    server.lock_runtime()
+
+    # After lock: same request is rejected.
+    conn = MagicMock()
+    server._dispatch(conn, "POST /spotify/token HTTP/1.1\r\n\r\nrefresh_token=tok")
+    assert "403" in conn.send.call_args[0][0].decode()
+
+
+def test_lock_runtime_is_idempotent(monkeypatch):
+    monkeypatch.setattr(config_server.miss_log, "all", lambda: [])
+    server = ConfigServer(mode="runtime", _sock=_mock_sock())
+    server.lock_runtime()
+    server.lock_runtime()   # must not raise
+    conn = MagicMock()
+    server._dispatch(conn, "GET /misses HTTP/1.1\r\n\r\n")  # read-only still works
+    assert "403" not in conn.send.call_args[0][0].decode()
 
 
 # ── /spotify/callback route removed — now 404 ────────────────────────────────

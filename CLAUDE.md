@@ -86,10 +86,11 @@ python src/musical-cultivator/scripts/import_misses.py [--host musical-mood-ring
 pytest tests/unit/
 ```
 
-**Flash MicroPython to the ESP32** (WSL2 + HUZZAH32):
+**Flash MicroPython to the ESP32** (WSL2):
 ```bash
-./build/reset.sh          # auto-activates .venv; prompts for usbipd if board not found
-./build/reset.sh --help   # full usage
+./build/reset.sh --chip esp32c3   # Seeed XIAO ESP32-C3 (/dev/ttyACM0)
+./build/reset.sh --chip esp32     # Adafruit HUZZAH32   (/dev/ttyUSB0)  [default]
+./build/reset.sh --help           # full usage
 ```
 
 One-time WSL2 prerequisites:
@@ -127,11 +128,11 @@ jupyter notebook src/mood-model/m0_calibration.ipynb
 - `wifi.py` — `connect(ssid, password)`, `is_connected()`, `try_connect(ssid, password)`
 - `ap.py` — `allow_configure()` / `disallow_configure()` (AP_IF wrapper)
 - `mdns.py` — `start(hostname)` / `stop()` (mDNS advertisement)
-- `spotify.py` — `auth_url()`, `exchange_code()`, `recently_played()` → `[(track_id, artist_id)]`, `refresh_token()`
+- `spotify.py` — `auth_url()`, `exchange_code()`, `recently_played()` → `[(track_id, artist_id)]`, `refresh_token()`. `SPOTIFY_MOCK_HOST` swaps in a plain-HTTP mock but is honoured **only for loopback/RFC1918 targets** (`_mock_host_ok`) and only from flashed `config.json` — never settable over HTTP — so a public host can't downgrade OAuth traffic to cleartext
 - `config.py` — reads/writes `config.json`; `save(data)` merges, `reload()` refreshes constants
-- `config_server.py` — non-blocking HTTP server; WiFi setup (AP mode) + Spotify OAuth (STA mode); `GET /misses` endpoint; accepts a `state=RuntimeState` kwarg as the hook for introspection endpoints landing in #58
-- `boot.py` — first-boot AP setup, then normal-boot WiFi connect + Spotify OAuth if needed
-- `main.py` — 3-minute poll loop; WDT, gc, active WiFi reconnect, panic guard
+- `config_server.py` — non-blocking HTTP server with a `mode` arg: `mode="setup"` routes all WiFi/Spotify config endpoints; `mode="runtime"` routes only the read-only allowlist (`_RUNTIME_ENDPOINTS` — `GET /misses`, plus #58's introspection GETs) and returns **403** for every mutating endpoint. `lock_runtime()` is the one-way setup→runtime flip. This is the security boundary that stops the always-on server exposing credential writes to any LAN host. Accepts a `state=RuntimeState` kwarg for #58. Spotify handlers never set `done` — the boot setup window (below) governs the setup→runtime transition
+- `boot.py` — first-boot AP setup (WiFi), then normal-boot WiFi connect + hand off to main.py
+- `main.py` — 3-minute poll loop. Serves `ConfigServer` in `setup` mode for a bounded **setup window** (`_SETUP_GRACE_MS`, 5 min after power-on — the owner is physically present), then calls `lock_runtime()` so only read-only introspection is served for the rest of uptime. Spotify OAuth (via the PC helper's `POST /spotify/token`) and mock-host changes happen during this window; re-config = power-cycle and act within it. Also: WDT, gc, active WiFi reconnect, panic guard
 
 The try/except convention: each module that needs a MicroPython-specific import wraps it in `try: import ujson / except ImportError: import json` (or equivalent). Pure modules have no such imports and run identically on both platforms.
 
@@ -170,16 +171,19 @@ Public API: `hue(theta_deg)`, `saturation_k()`, `brightness_floor()`, `brightnes
 
 **mDNS**: Device advertises as `musical-mood-ring.local`, providing a stable Spotify OAuth redirect URI (`http://musical-mood-ring.local/callback`) regardless of DHCP-assigned IP.
 
+**Config-server security model**: The HTTP config server runs in two modes. Mutating endpoints (`/wifi`, `/spotify/*`) are reachable only in `setup` mode — during first-boot AP setup and during a bounded **setup window** (`_SETUP_GRACE_MS`, 5 min) at the start of every normal boot, after which `main.py` calls `lock_runtime()` and only read-only introspection (`/misses`, #58's endpoints) is served for the rest of uptime. **Accepted risk**: that 5-minute window is *unauthenticated* and runs on the home LAN, so for 5 min after every power-on any LAN host can write config (WiFi creds, Spotify token). This is a deliberate trade-off — the owner is physically present at power-on, exposure is bounded, and the device targets a trusted home network. If the threat model tightens, the hardening path is a flashed shared-secret header on the mutating endpoints (not yet implemented). `SPOTIFY_MOCK_HOST` is flash-only (no HTTP write path) and honoured only for loopback/RFC1918 targets, so it can't be used to downgrade OAuth traffic to cleartext.
+
 **Deployment**: `mpremote` (not ampy) for flashing files to the ESP32. Use `build/reset.sh` to erase and reflash MicroPython itself. Use `build/deploy.sh` to copy firmware and bundles to an already-flashed board:
 
 ```bash
-./build/deploy.sh                        # full mood ring firmware + bundles (default)
-./build/deploy.sh --project twinkle      # hardware test: twinkle animation
-./build/deploy.sh --project whitenoise   # hardware test: white noise candle
-./build/deploy.sh --project flicker      # hardware test: candle + bell-strike peaks
-./build/deploy.sh --firmware-only        # mood.ring: .py files only, skip bundles
-./build/deploy.sh --bundles-only         # mood.ring: bundles only, skip .py files
-./build/deploy.sh --no-reset             # skip board reset after copy
+./build/deploy.sh --chip esp32c3                        # full mood ring firmware + bundles (C3)
+./build/deploy.sh --chip esp32c3 --project twinkle      # hardware test: twinkle animation
+./build/deploy.sh --chip esp32c3 --project whitenoise   # hardware test: white noise candle
+./build/deploy.sh --chip esp32c3 --project flicker      # hardware test: candle + bell-strike peaks
+./build/deploy.sh --chip esp32c3 --firmware-only        # mood.ring: .py files only, skip bundles
+./build/deploy.sh --chip esp32c3 --bundles-only         # mood.ring: bundles only, skip .py files
+./build/deploy.sh --chip esp32c3 --no-reset             # skip board reset after copy
+# (omit --chip esp32c3 for HUZZAH32)
 ```
 
 If the board is stuck running firmware (WiFi/AP stack active), `reset.sh` must be run first — the serial interrupt cannot break through the network stack.
