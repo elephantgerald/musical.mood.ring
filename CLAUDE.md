@@ -128,11 +128,11 @@ jupyter notebook src/mood-model/m0_calibration.ipynb
 - `wifi.py` — `connect(ssid, password)`, `is_connected()`, `try_connect(ssid, password)`
 - `ap.py` — `allow_configure()` / `disallow_configure()` (AP_IF wrapper)
 - `mdns.py` — `start(hostname)` / `stop()` (mDNS advertisement)
-- `spotify.py` — `auth_url()`, `exchange_code()`, `recently_played()` → `[(track_id, artist_id)]`, `refresh_token()`
+- `spotify.py` — `auth_url()`, `exchange_code()`, `recently_played()` → `[(track_id, artist_id)]`, `refresh_token()`. `SPOTIFY_MOCK_HOST` swaps in a plain-HTTP mock but is honoured **only for loopback/RFC1918 targets** (`_mock_host_ok`) and only from flashed `config.json` — never settable over HTTP — so a public host can't downgrade OAuth traffic to cleartext
 - `config.py` — reads/writes `config.json`; `save(data)` merges, `reload()` refreshes constants
-- `config_server.py` — non-blocking HTTP server; WiFi setup (AP mode) + Spotify OAuth (STA mode); `GET /misses` endpoint; accepts a `state=RuntimeState` kwarg as the hook for introspection endpoints landing in #58
-- `boot.py` — first-boot AP setup, then normal-boot WiFi connect + Spotify OAuth if needed
-- `main.py` — 3-minute poll loop; WDT, gc, active WiFi reconnect, panic guard
+- `config_server.py` — non-blocking HTTP server with a `mode` arg: `mode="setup"` (boot.py) routes all WiFi/Spotify config endpoints; `mode="runtime"` (main.py, always-on) routes only the read-only allowlist (`_RUNTIME_ENDPOINTS` — `GET /misses`, plus #58's introspection GETs) and returns **403** for every mutating endpoint. This is the security boundary that stops the always-on server exposing credential writes to any LAN host. Accepts a `state=RuntimeState` kwarg for #58
+- `boot.py` — first-boot AP setup, then normal-boot WiFi connect + Spotify OAuth if needed; runs `ConfigServer` in `setup` mode
+- `main.py` — 3-minute poll loop; runs `ConfigServer(mode="runtime")` from the loop (read-only introspection only); WDT, gc, active WiFi reconnect, panic guard
 
 The try/except convention: each module that needs a MicroPython-specific import wraps it in `try: import ujson / except ImportError: import json` (or equivalent). Pure modules have no such imports and run identically on both platforms.
 

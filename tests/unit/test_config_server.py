@@ -231,7 +231,7 @@ def test_post_spotify_token_saves_and_returns_200(monkeypatch):
     conn = MagicMock()
     server._dispatch(conn, "POST /spotify/token HTTP/1.1\r\n\r\nrefresh_token=tok123")
     assert saved.get("spotify_refresh_token") == "tok123"
-    assert not server.done   # server keeps running in main.py's loop
+    assert server.done   # setup-mode action: boot.py exits its loop into main.py
     assert "200" in conn.send.call_args[0][0].decode()
 
 
@@ -243,25 +243,81 @@ def test_post_spotify_token_missing_token_returns_400(monkeypatch):
     assert not server.done
 
 
-# ── POST /config ─────────────────────────────────────────────────────────────
+# ── POST /config removed — no arbitrary-key write endpoint exists (C1) ───────
 
-def test_post_config_saves_arbitrary_values(monkeypatch):
-    saved = {}
-    monkeypatch.setattr(config_server.config, "save",   lambda d: saved.update(d))
-    monkeypatch.setattr(config_server.config, "reload", lambda: None)
+def test_post_config_route_is_404():
+    """The arbitrary-key /config endpoint was removed. Setup mode must not route it."""
     server = _make_server()
     conn = MagicMock()
-    server._dispatch(conn, "POST /config HTTP/1.1\r\n\r\nspotify_mock_host=10.0.0.21%3A5000")
-    assert saved.get("spotify_mock_host") == "10.0.0.21:5000"
-    assert "200" in conn.send.call_args[0][0].decode()
+    server._dispatch(conn, "POST /config HTTP/1.1\r\n\r\nspotify_mock_host=evil%3A80")
+    assert "404" in conn.send.call_args[0][0].decode()
+
+
+# ── Runtime-mode security gate (C1 / I1) ─────────────────────────────────────
+
+def _runtime_server():
+    return ConfigServer(mode="runtime", _sock=_mock_sock())
+
+
+def test_runtime_mode_blocks_post_wifi(monkeypatch):
+    saved = {}
+    monkeypatch.setattr(config_server.config, "save", lambda d: saved.update(d))
+    server = _runtime_server()
+    conn = MagicMock()
+    server._dispatch(conn, "POST /wifi HTTP/1.1\r\n\r\nssid=Net&password=pw")
+    assert "403" in conn.send.call_args[0][0].decode()
+    assert saved == {}            # nothing written
     assert not server.done
 
 
-def test_post_config_empty_body_returns_400(monkeypatch):
+def test_runtime_mode_blocks_spotify_token(monkeypatch):
+    saved = {}
+    monkeypatch.setattr(config_server.config, "save", lambda d: saved.update(d))
+    monkeypatch.setattr(config_server.config, "reload", lambda: None)
+    server = _runtime_server()
+    conn = MagicMock()
+    server._dispatch(conn, "POST /spotify/token HTTP/1.1\r\n\r\nrefresh_token=attacker")
+    assert "403" in conn.send.call_args[0][0].decode()
+    assert saved == {}            # token not written
+    assert not server.done
+
+
+def test_runtime_mode_blocks_spotify_credentials(monkeypatch):
+    saved = {}
+    monkeypatch.setattr(config_server.config, "save", lambda d: saved.update(d))
+    server = _runtime_server()
+    conn = MagicMock()
+    server._dispatch(conn, "POST /spotify/credentials HTTP/1.1\r\n\r\nclient_id=x&client_secret=y")
+    assert "403" in conn.send.call_args[0][0].decode()
+    assert saved == {}
+
+
+def test_runtime_mode_blocks_root_page():
+    """The setup home page leaks config state — not served at runtime."""
+    server = _runtime_server()
+    conn = MagicMock()
+    server._dispatch(conn, "GET / HTTP/1.1\r\n\r\n")
+    assert "403" in conn.send.call_args[0][0].decode()
+
+
+def test_runtime_mode_allows_misses(monkeypatch):
+    """Read-only introspection stays available at runtime."""
+    monkeypatch.setattr(config_server.miss_log, "all", lambda: ["abc", "def"])
+    server = _runtime_server()
+    conn = MagicMock()
+    server._dispatch(conn, "GET /misses HTTP/1.1\r\n\r\n")
+    body = conn.send.call_args[0][0].decode()
+    assert "abc" in body and "def" in body
+
+
+def test_setup_mode_allows_post_wifi(monkeypatch):
+    """Setup mode (default) still routes mutating endpoints — gate is runtime-only."""
+    monkeypatch.setattr(config_server.wifi, "try_connect", lambda s, p: None)
     server = _make_server()
     conn = MagicMock()
-    server._dispatch(conn, "POST /config HTTP/1.1\r\n\r\n")
-    assert "400" in conn.send.call_args[0][0].decode()
+    server._dispatch(conn, "POST /wifi HTTP/1.1\r\n\r\nssid=BadNet&password=wrong")
+    # Reaches the handler (shows form error), not the 403 gate.
+    assert "403" not in conn.send.call_args[0][0].decode()
 
 
 # ── /spotify/callback route removed — now 404 ────────────────────────────────

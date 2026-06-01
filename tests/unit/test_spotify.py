@@ -189,3 +189,46 @@ def test_no_mock_host_uses_production_urls(monkeypatch):
     monkeypatch.setattr(spotify.requests, "get", fake_get)
     recently_played("tok")
     assert "api.spotify.com" in calls["url"]
+
+
+# ── Mock host downgrade refusal (C2) ─────────────────────────────────────────
+
+def test_public_mock_host_is_ignored_uses_https(monkeypatch):
+    """A public mock host must NOT downgrade traffic to cleartext HTTP."""
+    calls = {}
+    monkeypatch.setattr(spotify._config, "SPOTIFY_MOCK_HOST", "evil.example:80")
+    def fake_get(url, headers):
+        calls["url"] = url
+        return _get_resp(200)
+    monkeypatch.setattr(spotify.requests, "get", fake_get)
+    recently_played("tok")
+    assert calls["url"].startswith("https://api.spotify.com")
+    assert "evil.example" not in calls["url"]
+
+
+def test_public_mock_host_token_url_stays_https(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(spotify._config, "SPOTIFY_MOCK_HOST", "evil.example:80")
+    def fake_post(url, headers, data):
+        calls["url"] = url
+        return _post_resp(200, {"access_token": "a", "expires_in": 3600})
+    monkeypatch.setattr(spotify.requests, "post", fake_post)
+    spotify.refresh_token("cid", "csec", "rtok")
+    assert calls["url"] == "https://accounts.spotify.com/api/token"
+
+
+@pytest.mark.parametrize("host,ok", [
+    ("127.0.0.1:5000",  True),
+    ("localhost:5000",  True),
+    ("10.0.0.21:5000",  True),
+    ("192.168.1.50",    True),
+    ("172.16.0.9",      True),
+    ("172.31.255.1",    True),
+    ("172.15.0.1",      False),   # just below the RFC1918 block
+    ("172.32.0.1",      False),   # just above
+    ("evil.example:80", False),
+    ("8.8.8.8",         False),
+    ("",                False),
+])
+def test_mock_host_ok_classification(host, ok):
+    assert spotify._mock_host_ok(host) is ok

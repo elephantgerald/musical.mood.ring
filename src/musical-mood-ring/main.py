@@ -79,7 +79,7 @@ def main():
     state        = RuntimeState()
     state.engine = MoodEngine(bundle, artist_bundle)
     poller       = Poller()
-    cfg_server   = ConfigServer()
+    cfg_server   = ConfigServer(mode="runtime", state=state)
     access_token = None
     expires_at   = 0
 

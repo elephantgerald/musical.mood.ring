@@ -19,11 +19,19 @@
 #                                   signals done. Used because Spotify blocks non-HTTPS
 #                                   redirect URIs for non-localhost hosts.
 #
-#   Utility endpoints (always available in main loop):
+#   Read-only endpoints (also served in runtime mode from main.py's loop):
 #     GET  /misses                → plain-text list of unrecognised track IDs
 #                                   (one per line; pipe into cultivator pipeline)
-#     POST /config                → save arbitrary form-encoded key-value pairs to config
-#                                   (test/debug only — e.g. inject spotify_mock_host)
+#
+# Lifecycle / security:
+#   The server runs in one of two modes (see __init__):
+#     mode="setup"   — boot.py, time-bounded by setup completion. ALL endpoints
+#                      above are routed, including the config-mutating POSTs.
+#     mode="runtime" — main.py, always-on for the device's full uptime. Only the
+#                      read-only allowlist (_RUNTIME_ENDPOINTS) is routed; every
+#                      mutating/setup endpoint returns 403. This is the security
+#                      boundary that keeps the always-on server from exposing
+#                      /wifi, /spotify/* writes to any LAN host indefinitely.
 #
 # The server sets done=True when setup is complete or the 5-min timer fires.
 # Caller drives the loop: while not server.done: server.step(); animate; sleep
@@ -130,6 +138,15 @@ _HTML_SPOTIFY_ERROR = (
 )
 
 _HTML_404 = "HTTP/1.0 404 Not Found\r\n\r\n"
+_HTML_403 = "HTTP/1.0 403 Forbidden\r\n\r\nConfiguration endpoints are disabled at runtime."
+
+# (method, path) tuples reachable while the device runs normally (mode="runtime").
+# Read-only only — anything that mutates config must be a setup-mode action so an
+# always-on LAN server can't be used to rewrite credentials or redirect traffic.
+# #58's introspection endpoints (/state, /pixels, /poll-log) join this set.
+_RUNTIME_ENDPOINTS = {
+    ("GET", "/misses"),
+}
 
 
 # ── ConfigServer ─────────────────────────────────────────────────────────────
@@ -138,11 +155,16 @@ class ConfigServer:
     """
     Non-blocking HTTP config server.
 
+    mode:  "setup"   — boot.py: all endpoints routed (time-bounded by setup).
+           "runtime" — main.py: only _RUNTIME_ENDPOINTS routed; mutating
+                       endpoints return 403. See module docstring.
+
     Pass _sock for testing (dependency injection); omit to use a real socket.
     """
 
-    def __init__(self, host="0.0.0.0", port=80, state=None, _sock=None):
+    def __init__(self, host="0.0.0.0", port=80, mode="setup", state=None, _sock=None):
         self.done   = False
+        self._mode  = mode
         self._state = state   # RuntimeState ref for introspection endpoints (#58)
         if _sock is not None:
             self._sock = _sock
@@ -196,6 +218,11 @@ class ConfigServer:
         path    = path_qs.split("?")[0]
         query   = path_qs.split("?")[1] if "?" in path_qs else ""
 
+        # Security boundary: in runtime mode, only read-only endpoints are reachable.
+        if self._mode == "runtime" and (method, path) not in _RUNTIME_ENDPOINTS:
+            conn.send(_HTML_403.encode())
+            return
+
         if method == "GET" and path == "/":
             self._handle_root(conn)
         elif method == "POST" and path == "/wifi":
@@ -208,8 +235,6 @@ class ConfigServer:
             self._handle_spotify_callback(conn, _parse_form(query))
         elif method == "POST" and path == "/spotify/token":
             self._handle_spotify_token(conn, _extract_body(raw))
-        elif method == "POST" and path == "/config":
-            self._handle_config(conn, _extract_body(raw))
         elif method == "GET" and path == "/misses":
             self._handle_misses(conn)
         else:
@@ -297,16 +322,7 @@ class ConfigServer:
         conn.send(b"HTTP/1.0 200 OK\r\n\r\nOK")
         config.save({"spotify_refresh_token": token})
         config.reload()
-
-    def _handle_config(self, conn, body):
-        """Save arbitrary key-value pairs to config (test/debug use only)."""
-        params = _parse_form(body)
-        if not params:
-            conn.send(b"HTTP/1.0 400 Bad Request\r\n\r\nNo params")
-            return
-        config.save(params)
-        config.reload()
-        conn.send(b"HTTP/1.0 200 OK\r\n\r\nOK")
+        self.done = True  # boot.py exits the setup loop and falls through to main.py
 
     def _handle_misses(self, conn):
         """Return the miss log as plain text (one track ID per line)."""

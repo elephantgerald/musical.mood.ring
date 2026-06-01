@@ -14,8 +14,11 @@ Usage:
 
 Prerequisites:
     - http://127.0.0.1:8888/callback registered in your Spotify app dashboard
-    - Device running with WiFi and Spotify credentials already configured
-      (SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET saved on the device)
+    - Device in SETUP mode (boot.py serving the config server) with WiFi and
+      Spotify credentials already saved (SPOTIFY_CLIENT_ID + SPOTIFY_CLIENT_SECRET).
+      POST /spotify/token is a setup-only endpoint — it returns 403 once the
+      device has dropped into the normal runtime poll loop, so re-auth means
+      re-entering setup, not hitting a live device.
 
 Environment variables (optional — prompted if absent):
     SPOTIFY_CLIENT_ID
