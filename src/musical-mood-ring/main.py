@@ -31,10 +31,11 @@ import config
 import pixel
 import spotify
 import wifi
-from mmar        import load as mmar_load
-from mood_engine import MoodEngine
-from poller      import Poller
-from lights      import StartupFlare, IdleSparkle, MoodTransition, ErrorIndicator, ApiErrorBlip
+from mmar          import load as mmar_load
+from mood_engine   import MoodEngine
+from poller        import Poller
+from runtime_state import RuntimeState
+from lights        import StartupFlare, IdleSparkle, MoodTransition, ErrorIndicator, ApiErrorBlip
 
 FRAME_MS          = 100   # ~10 fps animation update rate
 BUNDLE_PATH       = "memory-bundle.bin"
@@ -74,7 +75,8 @@ def main():
     except OSError:
         pass   # artist bundle is optional — device works without it
 
-    engine       = MoodEngine(bundle, artist_bundle)
+    state        = RuntimeState()
+    state.engine = MoodEngine(bundle, artist_bundle)
     poller       = Poller()
     access_token = None
     expires_at   = 0
@@ -147,8 +149,11 @@ def main():
                     if _blip is None:
                         _blip = ApiErrorBlip(_last_colors)
                 else:
-                    new_colors = engine.update(track_ids)
+                    new_colors = state.engine.update(track_ids)
                     poller.on_success(now_ms)
+                    state.last_track_ids   = [tid for tid, _aid in track_ids]
+                    state.last_poll_ms     = now_ms
+                    state.last_mood_colors = new_colors
 
                     if poller.is_persistent_failure(now_ms):
                         # Graceful degradation — treat as idle, not an error
@@ -174,7 +179,8 @@ def main():
 
         # ── Handoff: startup flare → mood transition ──────────────────────
         if isinstance(animator, StartupFlare) and animator.done:
-            last = engine.update([])   # get current colours without a poll
+            last = state.engine.update([])   # get current colours without a poll
+            state.last_mood_colors = last
             animator = MoodTransition(last, last)
 
         # ── Advance animation and write pixels ────────────────────────────
@@ -185,7 +191,8 @@ def main():
                 _blip = None
             else:
                 colors = blip_out
-        _last_colors = colors
+        _last_colors      = colors
+        state.last_colors = colors
         pixel.write(colors)
 
         _sleep_ms(FRAME_MS)
