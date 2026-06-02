@@ -138,6 +138,12 @@ def main():
 
         # ── Poll ──────────────────────────────────────────────────────────
         if error_mode is None and config.SPOTIFY_REFRESH_TOKEN and poller.should_poll(now_ms):
+            # Per-poll outcome captured here and logged once at the end of the
+            # block (#57), on every path — success, network error, auth-fail.
+            poll_error     = None
+            poll_track_ids = []
+            poll_results   = []
+
             # Refresh access token when absent or near expiry
             if access_token is None or now_ms >= expires_at:
                 token, expires_in = spotify.refresh_token(
@@ -152,6 +158,7 @@ def main():
                     animator   = ErrorIndicator(ErrorIndicator.AUTH_FAIL)
                     error_mode = ErrorIndicator.AUTH_FAIL
                     poller.on_error(now_ms)
+                    poll_error = "auth_fail"
                 if _wdt:
                     _wdt.feed()   # token call may have consumed several seconds
 
@@ -160,6 +167,7 @@ def main():
                 if track_ids is None:
                     # Network or API error
                     poller.on_error(now_ms)
+                    poll_error = "network"
                     if _blip is None:
                         _blip = ApiErrorBlip(_last_colors)
                 else:
@@ -168,6 +176,10 @@ def main():
                     state.last_track_ids   = [tid for tid, _aid in track_ids]
                     state.last_poll_ms     = now_ms
                     state.last_mood_colors = new_colors
+                    poll_track_ids = state.last_track_ids
+                    # (v, e) per track, order-aligned to track_ids; None on miss.
+                    # OUTCOME_FIELDS = (track_id, artist_id, source, v, e).
+                    poll_results = [(o[3], o[4]) for o in state.engine.last_poll_outcomes()]
 
                     if poller.is_persistent_failure(now_ms):
                         # Graceful degradation — treat as idle, not an error
@@ -183,6 +195,12 @@ def main():
                             animator = MoodTransition(new_colors, new_colors)
                         elif isinstance(animator, MoodTransition):
                             animator.update_target(new_colors)
+
+            # Log this poll regardless of outcome (#57). colors_after is the
+            # engine's mood output (last_mood_colors), not the animator overlay.
+            mood_colors = state.last_mood_colors if state.last_mood_colors is not None else [(0, 0, 0)] * 3
+            state.record_poll(now_ms, poll_track_ids, poll_results, mood_colors,
+                              state.engine.snapshot()["confidence"], poll_error)
 
         # ── Auth-fail overlay: dismiss when done ──────────────────────────
         if (error_mode == ErrorIndicator.AUTH_FAIL
