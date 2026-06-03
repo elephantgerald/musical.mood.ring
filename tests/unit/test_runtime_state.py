@@ -235,6 +235,17 @@ def test_poll_log_snapshot_returns_copies():
     assert state.poll_log[0]["track_ids"] == ["t0"]
 
 
+def test_poll_record_colors_after_none_preserved():
+    """A poll that fails before any success has no mood yet — store None, not
+    black, so /poll-log keeps the same distinction snapshot() does."""
+    state = RuntimeState()
+    state.record_poll(time_ms=1, track_ids=[], track_results=[],
+                      colors_after=None, confidence_after=1.0, error="auth_fail")
+    rec = state.poll_log_snapshot()[0]
+    assert rec["colors_after"] is None
+    assert json.loads(json.dumps(rec)) == rec   # None survives json round-trip
+
+
 def test_record_poll_copies_inputs_not_aliases():
     """A caller mutating the lists it passed in must not change a stored record."""
     state = RuntimeState()

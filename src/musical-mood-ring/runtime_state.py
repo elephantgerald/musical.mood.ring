@@ -98,7 +98,11 @@ class RuntimeState:
             time_ms          — ticks_ms when the poll ran
             track_ids        — [str, ...] polled (empty on auth/network failure)
             track_results    — [(v, e) | None, ...], order-aligned to track_ids
-            colors_after     — 3 (r, g, b) engine mood colors after the poll
+            colors_after     — 3 (r, g, b) engine mood colors, or None before the
+                               first successful poll. Stored as None rather than
+                               black so a reader can tell "engine never produced a
+                               mood" apart from a genuine all-black output — the
+                               same distinction snapshot() preserves.
             confidence_after — engine confidence scalar after the poll
             error            — None | "network" | "auth_fail"
         """
@@ -107,7 +111,8 @@ class RuntimeState:
             "track_ids":        list(track_ids),
             "track_results":    [list(r) if r is not None else None
                                  for r in track_results],
-            "colors_after":     [list(c) for c in colors_after],
+            "colors_after":     ([list(c) for c in colors_after]
+                                 if colors_after is not None else None),
             "confidence_after": confidence_after,
             "error":            error,
         }
@@ -129,7 +134,8 @@ class RuntimeState:
                 "track_ids":        list(r["track_ids"]),
                 "track_results":    [list(x) if x is not None else None
                                      for x in r["track_results"]],
-                "colors_after":     [list(c) for c in r["colors_after"]],
+                "colors_after":     ([list(c) for c in r["colors_after"]]
+                                     if r["colors_after"] is not None else None),
                 "confidence_after": r["confidence_after"],
                 "error":            r["error"],
             }
