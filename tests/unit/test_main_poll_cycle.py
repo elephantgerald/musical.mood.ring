@@ -130,3 +130,56 @@ def test_refresh_updates_token_and_expiry(monkeypatch):
 
     assert res["access_token"] == "fresh"
     assert res["expires_at"]   == 1000 + (3600 - 60) * 1000
+
+
+# ── should_degrade_to_idle — the S4 fix ─────────────────────────────────────
+#
+# Before this fix, is_persistent_failure() was only checked on the success path
+# (right after on_success() zeroed the error count), so the graceful-degradation
+# branch was unreachable dead code. The check now runs every loop iteration via
+# this helper; these tests lock its guard logic.
+
+from poller import _PERSISTENT_MS
+
+_T0 = 1_000_000
+
+
+def _failing_poller(first_error_ms=_T0):
+    """A poller mid-error-streak since first_error_ms (no successes)."""
+    p = Poller()
+    p.on_error(first_error_ms)
+    return p
+
+
+def test_degrades_after_persistent_failure_window():
+    p = _failing_poller(_T0)
+    # Just before the 15-min window: not yet.
+    assert not main.should_degrade_to_idle(p, None, False, _T0 + _PERSISTENT_MS - 1)
+    # At/after the window: degrade.
+    assert main.should_degrade_to_idle(p, None, False, _T0 + _PERSISTENT_MS)
+
+
+def test_no_degrade_when_error_overlay_active():
+    """Must not fight WIFI_LOST / AUTH_FAIL overlays."""
+    p = _failing_poller(_T0)
+    now = _T0 + _PERSISTENT_MS
+    assert not main.should_degrade_to_idle(p, "wifi_lost", False, now)
+    assert not main.should_degrade_to_idle(p, "auth_fail", False, now)
+
+
+def test_no_degrade_when_already_idle():
+    p = _failing_poller(_T0)
+    assert not main.should_degrade_to_idle(p, None, True, _T0 + _PERSISTENT_MS)
+
+
+def test_no_degrade_without_an_error_streak():
+    """A healthy poller (no consecutive errors) never degrades."""
+    assert not main.should_degrade_to_idle(Poller(), None, False, _T0 + _PERSISTENT_MS)
+
+
+def test_no_degrade_immediately_after_success():
+    """The old dead-code condition: on_success() zeroes the streak, so a
+    just-succeeded poll can never be a persistent failure."""
+    p = _failing_poller(_T0)
+    p.on_success(_T0 + _PERSISTENT_MS)
+    assert not main.should_degrade_to_idle(p, None, False, _T0 + _PERSISTENT_MS + 1)

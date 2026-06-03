@@ -63,6 +63,22 @@ _GC_INTERVAL           = 10       # call gc.collect() every N loop iterations
 _SETUP_GRACE_MS        = 300_000  # 5 min after boot: config endpoints open, then lock to read-only
 
 
+def should_degrade_to_idle(poller, error_mode, in_idle, now_ms):
+    """True when polls have failed long enough to calmly fall back to idle.
+
+    Must be checked once per loop iteration — NOT only after a poll. That
+    placement is the whole point of the fix: is_persistent_failure() can only be
+    True while an error streak is active, and on_success() zeroes that streak, so
+    a check nested in the success path is dead code that never fires.
+
+    Guarded so it never overrides an active error overlay (WIFI_LOST / AUTH_FAIL)
+    and doesn't re-trigger once already idle.
+    """
+    return (error_mode is None
+            and not in_idle
+            and poller.is_persistent_failure(now_ms))
+
+
 def run_poll_cycle(state, poller, access_token, expires_at, now_ms, wdt=None):
     """Run one Spotify poll and record the outcome to the poll log (#57).
 
@@ -226,21 +242,28 @@ def main():
                 if _blip is None:
                     _blip = ApiErrorBlip(_last_colors)
             else:
+                # Successful poll — advance the mood animation. (Persistent-
+                # failure degradation is handled once-per-iteration below; it
+                # can never apply here because on_success() just reset the
+                # error streak.)
                 new_colors = result["new_colors"]
-                if poller.is_persistent_failure(now_ms):
-                    # Graceful degradation — treat as idle, not an error
-                    if not in_idle:
-                        animator = IdleSparkle()
-                        in_idle  = True
-                else:
-                    was_idle = in_idle
-                    in_idle  = False
-                    if was_idle:
-                        animator = StartupFlare(new_colors)
-                    elif isinstance(animator, StartupFlare) and animator.done:
-                        animator = MoodTransition(new_colors, new_colors)
-                    elif isinstance(animator, MoodTransition):
-                        animator.update_target(new_colors)
+                was_idle = in_idle
+                in_idle  = False
+                if was_idle:
+                    animator = StartupFlare(new_colors)
+                elif isinstance(animator, StartupFlare) and animator.done:
+                    animator = MoodTransition(new_colors, new_colors)
+                elif isinstance(animator, MoodTransition):
+                    animator.update_target(new_colors)
+
+        # ── Graceful degradation: calm to idle after a prolonged outage ────
+        # Checked every iteration (not just after a poll). is_persistent_failure
+        # is only ever True mid-error-streak — which never coincides with the
+        # just-succeeded poll path above — so this is where the degradation
+        # actually fires once the failure window elapses.
+        if should_degrade_to_idle(poller, error_mode, in_idle, now_ms):
+            animator = IdleSparkle()
+            in_idle  = True
 
         # ── Auth-fail overlay: dismiss when done ──────────────────────────
         if (error_mode == ErrorIndicator.AUTH_FAIL
