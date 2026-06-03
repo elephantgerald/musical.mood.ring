@@ -18,6 +18,7 @@ from mmar          import MMARBundle
 from mood_engine   import MoodEngine
 from poller        import Poller
 from runtime_state import RuntimeState
+from lights        import StartupFlare, IdleSparkle, MoodTransition
 
 
 @pytest.fixture(autouse=True)
@@ -177,9 +178,95 @@ def test_no_degrade_without_an_error_streak():
     assert not main.should_degrade_to_idle(Poller(), None, False, _T0 + _PERSISTENT_MS)
 
 
-def test_no_degrade_immediately_after_success():
-    """The old dead-code condition: on_success() zeroes the streak, so a
-    just-succeeded poll can never be a persistent failure."""
+def test_degrades_using_last_success_reference():
+    """Realistic outage: polled fine for a while, then the network dropped.
+    is_persistent_failure measures from last success, not first-ever error —
+    exercise that branch through the helper (the failing-only tests above only
+    hit the first_error_ms branch)."""
+    p = Poller()
+    p.on_success(_T0)                 # healthy baseline
+    p.on_error(_T0 + 60_000)         # then errors start a minute later
+    # Measured from last success (_T0), not from the first error: the ring
+    # degrades 15 min after the last good poll regardless of when errors began.
+    assert not main.should_degrade_to_idle(p, None, False, _T0 + _PERSISTENT_MS - 1)
+    assert main.should_degrade_to_idle(p, None, False, _T0 + _PERSISTENT_MS)
+
+
+def test_helper_is_false_right_after_success_is_a_contract_not_a_placement_guard():
+    """Documents WHY the old nested check was dead: on_success() zeroes the
+    streak, so the helper is False on a just-succeeded poll.
+
+    NOTE: this pins the *helper contract*, not the structural fix. It cannot
+    catch a regression that re-nests the should_degrade_to_idle() *call* back
+    inside the success branch — that placement bug lives in main()'s loop. The
+    next_animator tests below guard the composed behaviour instead."""
     p = _failing_poller(_T0)
     p.on_success(_T0 + _PERSISTENT_MS)
     assert not main.should_degrade_to_idle(p, None, False, _T0 + _PERSISTENT_MS + 1)
+
+
+# ── next_animator — the per-iteration mood↔idle transition (I2) ─────────────
+#
+# The fix's value is that this decision runs every loop iteration, so degrade
+# and recovery are reachable. Extracting it makes that composition testable off
+# the board (main()'s loop is an infinite loop and can't be driven directly).
+
+_COLORS = [(10, 20, 30), (40, 50, 60), (70, 80, 90)]
+
+
+def _done_flare():
+    sf = StartupFlare(_COLORS)
+    sf.step(3001)                     # past the 3 s duration → done
+    assert sf.done
+    return sf
+
+
+def test_next_animator_degrade_wins_and_goes_idle():
+    animator, in_idle = main.next_animator(MoodTransition(_COLORS, _COLORS),
+                                           False, None, degrade=True)
+    assert isinstance(animator, IdleSparkle)
+    assert in_idle is True
+
+
+def test_next_animator_degrade_precedes_a_concurrent_success():
+    """Precedence is defensive: degrade and a fresh poll never co-occur in
+    practice, but if they did, degradation must win."""
+    animator, in_idle = main.next_animator(MoodTransition(_COLORS, _COLORS),
+                                           False, _COLORS, degrade=True)
+    assert isinstance(animator, IdleSparkle)
+    assert in_idle is True
+
+
+def test_next_animator_recovery_flares_out_of_idle():
+    """The I1-relevant path: once in_idle is True, the next successful poll
+    must flare back to mood — not stay stuck in idle sparkle."""
+    animator, in_idle = main.next_animator(IdleSparkle(), True, _COLORS, degrade=False)
+    assert isinstance(animator, StartupFlare)
+    assert in_idle is False
+
+
+def test_next_animator_finished_flare_hands_off_to_transition():
+    animator, in_idle = main.next_animator(_done_flare(), False, _COLORS, degrade=False)
+    assert isinstance(animator, MoodTransition)
+    assert in_idle is False
+
+
+def test_next_animator_retargets_live_transition_in_place():
+    mt = MoodTransition(_COLORS, _COLORS)
+    animator, in_idle = main.next_animator(mt, False, _COLORS, degrade=False)
+    assert animator is mt          # same object, retargeted not replaced
+    assert in_idle is False
+
+
+def test_next_animator_no_poll_no_degrade_is_a_noop():
+    mt = MoodTransition(_COLORS, _COLORS)
+    animator, in_idle = main.next_animator(mt, False, None, degrade=False)
+    assert animator is mt
+    assert in_idle is False
+
+
+def test_next_animator_idle_with_no_poll_stays_idle():
+    idle = IdleSparkle()
+    animator, in_idle = main.next_animator(idle, True, None, degrade=False)
+    assert animator is idle
+    assert in_idle is True

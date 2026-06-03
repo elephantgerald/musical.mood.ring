@@ -24,6 +24,11 @@
 # Error overlays (exit back to idle sparkle when condition clears):
 #   wifi_lost  — slow dim red pulse + active reconnect every 60 s
 #   auth_fail  — 3 red flashes, then idle sparkle
+#
+# Graceful degradation: after a sustained Spotify outage (no successful poll for
+# ~15 min) the ring calms to idle sparkle rather than holding stale colours. This
+# looks like "no music," but the failure is not hidden — every poll outcome is
+# recorded to the poll log (#57) and surfaced over HTTP (#58).
 
 import gc
 
@@ -77,6 +82,40 @@ def should_degrade_to_idle(poller, error_mode, in_idle, now_ms):
     return (error_mode is None
             and not in_idle
             and poller.is_persistent_failure(now_ms))
+
+
+def next_animator(animator, in_idle, new_colors, degrade):
+    """Compute the next (animator, in_idle) for one loop iteration — pure.
+
+    Owns only the mood↔idle animator. Error overlays (WIFI_LOST/AUTH_FAIL
+    indicators, the ApiErrorBlip, error_mode) stay in the loop; this composes
+    the two mood-relevant decisions so both are unit-testable off the board:
+
+        degrade=True            → calm to idle sparkle (persistent-failure
+                                  graceful degradation; takes precedence).
+        new_colors set (a poll  → advance the mood animation: flare out of idle
+        succeeded this iter)      on the first hit, hand the finished flare to a
+                                  MoodTransition, then retarget it on later hits.
+        new_colors is None       → no successful poll this iteration; leave the
+        and not degrading          animator untouched.
+
+    degrade and a successful poll are mutually exclusive in practice:
+    run_poll_cycle calls on_success() on the success path, which zeroes the
+    error streak, so should_degrade_to_idle() is False that same iteration. The
+    precedence here just makes the helper total.
+    """
+    if degrade:
+        return IdleSparkle(), True
+    if new_colors is None:
+        return animator, in_idle
+    if in_idle:
+        return StartupFlare(new_colors), False
+    if isinstance(animator, StartupFlare) and animator.done:
+        return MoodTransition(new_colors, new_colors), False
+    if isinstance(animator, MoodTransition):
+        animator.update_target(new_colors)
+        return animator, False
+    return animator, False
 
 
 def run_poll_cycle(state, poller, access_token, expires_at, now_ms, wdt=None):
@@ -226,9 +265,11 @@ def main():
             in_idle    = True
 
         # ── Poll ──────────────────────────────────────────────────────────
-        # run_poll_cycle does the fetch + engine update + poll-log record (#57);
-        # here we map its outcome onto the animator. Token state is threaded
-        # back out so it survives across iterations.
+        # run_poll_cycle does the fetch + engine update + poll-log record (#57).
+        # Here we map its outcome onto error overlays and capture new_colors for
+        # the mood animation; token state is threaded back out across iterations.
+        # The mood↔idle animator itself is computed once below via next_animator.
+        new_colors = None   # set only when a poll succeeds this iteration
         if error_mode is None and config.SPOTIFY_REFRESH_TOKEN and poller.should_poll(now_ms):
             result       = run_poll_cycle(state, poller, access_token, expires_at, now_ms, _wdt)
             access_token = result["access_token"]
@@ -239,31 +280,25 @@ def main():
                 animator   = ErrorIndicator(ErrorIndicator.AUTH_FAIL)
                 error_mode = ErrorIndicator.AUTH_FAIL
             elif poll_error == "network":
+                # Brief overlay only; error_mode stays None so a sustained
+                # network outage can fall through to graceful degradation below.
                 if _blip is None:
                     _blip = ApiErrorBlip(_last_colors)
             else:
-                # Successful poll — advance the mood animation. (Persistent-
-                # failure degradation is handled once-per-iteration below; it
-                # can never apply here because on_success() just reset the
-                # error streak.)
+                # poll_error is None ⟺ run_poll_cycle called on_success(), so
+                # new_colors is the fresh mood and the error streak is now zero.
                 new_colors = result["new_colors"]
-                was_idle = in_idle
-                in_idle  = False
-                if was_idle:
-                    animator = StartupFlare(new_colors)
-                elif isinstance(animator, StartupFlare) and animator.done:
-                    animator = MoodTransition(new_colors, new_colors)
-                elif isinstance(animator, MoodTransition):
-                    animator.update_target(new_colors)
 
-        # ── Graceful degradation: calm to idle after a prolonged outage ────
-        # Checked every iteration (not just after a poll). is_persistent_failure
-        # is only ever True mid-error-streak — which never coincides with the
-        # just-succeeded poll path above — so this is where the degradation
-        # actually fires once the failure window elapses.
-        if should_degrade_to_idle(poller, error_mode, in_idle, now_ms):
-            animator = IdleSparkle()
-            in_idle  = True
+        # ── Mood↔idle animator ────────────────────────────────────────────
+        # Computed every iteration (not just after a poll). The degrade flag is
+        # only ever True mid-error-streak, which — because on_success() zeroed
+        # the streak above — never coincides with new_colors being set. This is
+        # where the network/silent-outage case finally calms to idle once the
+        # 15-min window elapses; the AUTH_FAIL path reaches idle via its own
+        # dismissal below instead.
+        animator, in_idle = next_animator(
+            animator, in_idle, new_colors,
+            should_degrade_to_idle(poller, error_mode, in_idle, now_ms))
 
         # ── Auth-fail overlay: dismiss when done ──────────────────────────
         if (error_mode == ErrorIndicator.AUTH_FAIL
@@ -271,6 +306,7 @@ def main():
                 and animator.done):
             animator   = IdleSparkle()
             error_mode = None
+            in_idle    = True   # mirror WIFI_LOST recovery so the next hit flares
 
         # ── Handoff: startup flare → mood transition ──────────────────────
         if isinstance(animator, StartupFlare) and animator.done:
