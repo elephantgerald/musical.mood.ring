@@ -19,6 +19,14 @@
 
 from mood_engine import OUTCOME_FIELDS
 
+# Depth of the rolling poll log (#57). recently_played() returns ≤10 tracks, so
+# a record is ~350 B typical, ~580 B worst case (10 IDs + their (v,e) pairs).
+# 20 records covers the last hour at the default 3-minute cadence. The whole log
+# is a handful of KB of small dicts in RAM — well within the ESP32 budget; only
+# the transient JSON of a full /poll-log response approaches ~12 KB, which the
+# board serves without trouble.
+_POLL_LOG_SIZE = 20
+
 
 class RuntimeState:
     """Aggregate of mutable runtime state observable via HTTP.
@@ -47,6 +55,7 @@ class RuntimeState:
         self.last_poll_ms     = 0                # ticks_ms of last successful poll
         self.last_colors      = [(0, 0, 0)] * 3  # last colors written to pixels
         self.last_mood_colors = None             # last engine.update() return; None until first call
+        self.poll_log         = []               # rolling list of the last _POLL_LOG_SIZE poll records
 
     def snapshot(self):
         """JSON-serializable view of all runtime state.
@@ -72,3 +81,63 @@ class RuntimeState:
             "last_mood_colors":   ([list(c) for c in self.last_mood_colors]
                                    if self.last_mood_colors is not None else None),
         }
+
+    def record_poll(self, time_ms, track_ids, track_results, colors_after,
+                    confidence_after, error):
+        """Append one poll outcome to the rolling log (#57), capped at _POLL_LOG_SIZE.
+
+        Called once per poll from main.py on every outcome path — success,
+        network error, and auth-fail alike — so the log is a faithful trace of
+        what the device actually did, not just its successes.
+
+        The record is built fully-owned and json.dumps()-able: input sequences
+        are copied (a caller mutating them later can't corrupt a stored record)
+        and tuples are flattened to lists. Per the M10 learning, colors_after is
+        the engine's mood output, not the animator's last_colors overlay.
+
+            time_ms          — ticks_ms when the poll ran
+            track_ids        — [str, ...] polled (empty on auth/network failure)
+            track_results    — [(v, e) | None, ...], order-aligned to track_ids
+            colors_after     — 3 (r, g, b) engine mood colors, or None before the
+                               first successful poll. Stored as None rather than
+                               black so a reader can tell "engine never produced a
+                               mood" apart from a genuine all-black output — the
+                               same distinction snapshot() preserves.
+            confidence_after — engine confidence scalar after the poll
+            error            — None | "network" | "auth_fail"
+        """
+        record = {
+            "time_ms":          time_ms,
+            "track_ids":        list(track_ids),
+            "track_results":    [list(r) if r is not None else None
+                                 for r in track_results],
+            "colors_after":     ([list(c) for c in colors_after]
+                                 if colors_after is not None else None),
+            "confidence_after": confidence_after,
+            "error":            error,
+        }
+        self.poll_log.append(record)
+        if len(self.poll_log) > _POLL_LOG_SIZE:
+            self.poll_log.pop(0)   # evict oldest; plain list keeps MicroPython happy
+
+    def poll_log_snapshot(self):
+        """JSON-serializable copy of the poll log, oldest first.
+
+        Each record is rebuilt with fresh nested lists so a reader can't mutate
+        the live log — the same deep-copy-to-JSON-ready discipline snapshot()
+        applies to last_colors. Kept separate from snapshot() so /state stays
+        lean and #58's /poll-log endpoint serves this buffer on its own.
+        """
+        return [
+            {
+                "time_ms":          r["time_ms"],
+                "track_ids":        list(r["track_ids"]),
+                "track_results":    [list(x) if x is not None else None
+                                     for x in r["track_results"]],
+                "colors_after":     ([list(c) for c in r["colors_after"]]
+                                     if r["colors_after"] is not None else None),
+                "confidence_after": r["confidence_after"],
+                "error":            r["error"],
+            }
+            for r in self.poll_log
+        ]

@@ -118,7 +118,7 @@ jupyter notebook src/mood-model/m0_calibration.ipynb
 - `ewma.py` — `EWMA(alpha)` accumulator with snap-on-first-update and `reset()`
 - `color.py` — `mood_to_rgb(v, e)` → `(r, g, b)` via synaesthesia profile; `apply_confidence(rgb, c)` scales saturation
 - `mood_engine.py` — `MoodEngine(bundle, artist_bundle).update(track_pairs)` → 3 RGB tuples; two-tier lookup (track → artist fallback); confidence scalar applied to saturation; now-pixel persistence across miss polls; `snapshot()` / `last_poll_outcomes()` / `OUTCOME_FIELDS` expose internal state for HTTP introspection
-- `runtime_state.py` — `RuntimeState` shared object passed from `main.py` (writer) to `ConfigServer` (reader) so introspection endpoints (#58) can read engine + last-poll metadata without circular imports; `snapshot()` returns a JSON-serializable view
+- `runtime_state.py` — `RuntimeState` shared object passed from `main.py` (writer) to `ConfigServer` (reader) so introspection endpoints (#58) can read engine + last-poll metadata without circular imports; `snapshot()` returns a JSON-serializable view; also holds the rolling 20-entry poll log (#57) — `record_poll()` appends one capped, JSON-able record per poll and `poll_log_snapshot()` returns a deep copy for `/poll-log`
 - `miss_log.py` — rolling 1000-entry miss log on flash (`misses.txt`); `append(track_id)`, `all()`, `clear()`
 - `poller.py` — poll timing with exponential back-off; `should_poll()`, `on_success()`, `on_error()`
 - `synaesthesia.py` — colour profile loader (see below)

@@ -136,3 +136,126 @@ def test_no_circular_import_runtime_first():
 
 def test_no_circular_import_config_server_first():
     _reimport("config_server", "mood_engine", "runtime_state")
+
+
+# ── Poll ring buffer (#57) ──────────────────────────────────────────────────
+#
+# A rolling log of the last RuntimeState._POLL_LOG_SIZE poll outcomes, appended
+# once per poll on every path (success, network error, auth-fail). Bounded
+# memory; each record json.dumps()-able. Feeds #58's /poll-log endpoint.
+
+from runtime_state import _POLL_LOG_SIZE
+
+
+def _record(state, n, error=None):
+    """Append one synthetic poll record numbered n."""
+    state.record_poll(
+        time_ms=n * 1000,
+        track_ids=["t%d" % n],
+        track_results=[(0.3, 0.7)],
+        colors_after=[(10, 20, 30), (40, 50, 60), (70, 80, 90)],
+        confidence_after=1.0,
+        error=error,
+    )
+
+
+def test_poll_log_starts_empty():
+    state = RuntimeState()
+    assert state.poll_log == []
+    assert state.poll_log_snapshot() == []
+
+
+def test_poll_log_caps_at_size_after_30_polls():
+    """Required by the issue: 30 polls, only the most recent 20 retained."""
+    state = RuntimeState()
+    for n in range(30):
+        _record(state, n)
+    log = state.poll_log_snapshot()
+    assert len(log) == _POLL_LOG_SIZE == 20
+    # Oldest-first; the first 10 (0–9) have been evicted, 10–29 remain.
+    assert [r["time_ms"] for r in log] == [n * 1000 for n in range(10, 30)]
+
+
+def test_poll_log_no_growth_over_100_plus_cycles():
+    state = RuntimeState()
+    for n in range(150):
+        _record(state, n)
+    assert len(state.poll_log) == _POLL_LOG_SIZE
+    assert len(state.poll_log_snapshot()) == _POLL_LOG_SIZE
+
+
+def test_poll_record_shape_and_fields():
+    state = RuntimeState()
+    state.record_poll(
+        time_ms=12345,
+        track_ids=["a", "b"],
+        track_results=[(0.1, 0.2), None],
+        colors_after=[(1, 2, 3), (4, 5, 6), (7, 8, 9)],
+        confidence_after=0.6,
+        error=None,
+    )
+    rec = state.poll_log_snapshot()[0]
+    assert rec == {
+        "time_ms":          12345,
+        "track_ids":        ["a", "b"],
+        "track_results":    [[0.1, 0.2], None],   # miss → null; tuples → lists
+        "colors_after":     [[1, 2, 3], [4, 5, 6], [7, 8, 9]],
+        "confidence_after": 0.6,
+        "error":            None,
+    }
+
+
+def test_poll_record_json_dumps_able():
+    state = RuntimeState()
+    _record(state, 0)
+    _record(state, 1, error="auth_fail")
+    snap = state.poll_log_snapshot()
+    assert json.loads(json.dumps(snap)) == snap
+
+
+@pytest.mark.parametrize("error", [None, "auth_fail", "network"])
+def test_poll_log_records_every_outcome_path(error):
+    """Append happens regardless of whether error_mode is None or set."""
+    state = RuntimeState()
+    state.record_poll(
+        time_ms=1, track_ids=[], track_results=[],
+        colors_after=[(0, 0, 0)] * 3, confidence_after=1.0, error=error,
+    )
+    assert state.poll_log_snapshot()[0]["error"] == error
+
+
+def test_poll_log_snapshot_returns_copies():
+    """Mutating the snapshot must not corrupt the live log."""
+    state = RuntimeState()
+    _record(state, 0)
+    snap = state.poll_log_snapshot()
+    snap[0]["error"] = "tampered"
+    snap[0]["track_ids"].append("x")
+    assert state.poll_log[0]["error"] is None
+    assert state.poll_log[0]["track_ids"] == ["t0"]
+
+
+def test_poll_record_colors_after_none_preserved():
+    """A poll that fails before any success has no mood yet — store None, not
+    black, so /poll-log keeps the same distinction snapshot() does."""
+    state = RuntimeState()
+    state.record_poll(time_ms=1, track_ids=[], track_results=[],
+                      colors_after=None, confidence_after=1.0, error="auth_fail")
+    rec = state.poll_log_snapshot()[0]
+    assert rec["colors_after"] is None
+    assert json.loads(json.dumps(rec)) == rec   # None survives json round-trip
+
+
+def test_record_poll_copies_inputs_not_aliases():
+    """A caller mutating the lists it passed in must not change a stored record."""
+    state = RuntimeState()
+    ids = ["t0"]
+    results = [(0.3, 0.7)]
+    colors = [(1, 2, 3), (4, 5, 6), (7, 8, 9)]
+    state.record_poll(time_ms=0, track_ids=ids, track_results=results,
+                      colors_after=colors, confidence_after=1.0, error=None)
+    ids.append("mutated")
+    results.append((9.9, 9.9))
+    rec = state.poll_log[0]
+    assert rec["track_ids"] == ["t0"]
+    assert rec["track_results"] == [[0.3, 0.7]]
