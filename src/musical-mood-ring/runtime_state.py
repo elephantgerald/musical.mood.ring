@@ -56,6 +56,8 @@ class RuntimeState:
         self.last_colors      = [(0, 0, 0)] * 3  # last colors written to pixels
         self.last_mood_colors = None             # last engine.update() return; None until first call
         self.poll_log         = []               # rolling list of the last _POLL_LOG_SIZE poll records
+        self.animator         = None             # active lights animator (main.py writes each frame)
+        self.error_mode       = None             # None | "wifi_lost" | "auth_fail"
 
     def snapshot(self):
         """JSON-serializable view of all runtime state.
@@ -80,6 +82,10 @@ class RuntimeState:
             "last_colors":        [list(c) for c in self.last_colors],
             "last_mood_colors":   ([list(c) for c in self.last_mood_colors]
                                    if self.last_mood_colors is not None else None),
+            "animator":           (None if self.animator is None else
+                                   {"class": type(self.animator).__name__,
+                                    "done":  getattr(self.animator, "done", None)}),
+            "error_mode":         self.error_mode,
         }
 
     def record_poll(self, time_ms, track_ids, track_results, colors_after,

@@ -39,11 +39,36 @@
 import socket
 
 try:
+    import ujson as json
+except ImportError:
+    import json
+
+try:
     import machine as _machine
     _HW = True
 except ImportError:
     _machine = None
     _HW = False
+
+# uptime_ms for /state — ticks_ms is ms-since-boot on MicroPython; the CPython
+# fallback is wall-clock and only used in tests (where the value is unused).
+try:
+    import utime
+    def _now_ms(): return utime.ticks_ms()
+except ImportError:
+    import time
+    def _now_ms(): return int(time.time() * 1000)
+
+# free_mem for /state — gc.mem_free() exists only on MicroPython. CPython has gc
+# but no mem_free, so report None there.
+try:
+    import gc as _gc
+except ImportError:
+    _gc = None
+
+def _free_mem():
+    fn = getattr(_gc, "mem_free", None) if _gc is not None else None
+    return fn() if fn is not None else None
 
 import config
 import miss_log
@@ -143,9 +168,13 @@ _HTML_403 = "HTTP/1.0 403 Forbidden\r\n\r\nConfiguration endpoints are disabled 
 # (method, path) tuples reachable while the device runs normally (mode="runtime").
 # Read-only only — anything that mutates config must be a setup-mode action so an
 # always-on LAN server can't be used to rewrite credentials or redirect traffic.
-# #58's introspection endpoints (/state, /pixels, /poll-log) join this set.
+# #58's introspection endpoints join this set — all read-only JSON GETs.
 _RUNTIME_ENDPOINTS = {
     ("GET", "/misses"),
+    ("GET", "/state"),
+    ("GET", "/pixels"),
+    ("GET", "/poll-log"),
+    ("GET", "/config"),
 }
 
 
@@ -246,6 +275,14 @@ class ConfigServer:
             self._handle_spotify_token(conn, _extract_body(raw))
         elif method == "GET" and path == "/misses":
             self._handle_misses(conn)
+        elif method == "GET" and path == "/state":
+            self._handle_state(conn)
+        elif method == "GET" and path == "/pixels":
+            self._handle_pixels(conn)
+        elif method == "GET" and path == "/poll-log":
+            self._handle_poll_log(conn, query)
+        elif method == "GET" and path == "/config":
+            self._handle_config(conn)
         else:
             conn.send(_HTML_404.encode())
 
@@ -345,8 +382,87 @@ class ConfigServer:
             ("HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\n" + body).encode()
         )
 
+    # ── #58 introspection endpoints (read-only JSON) ──────────────────────────
+
+    def _handle_state(self, conn):
+        """Full runtime snapshot plus request-time ambient fields.
+
+        Superset of RuntimeState.snapshot() (engine, last_* views, animator,
+        error_mode) with wifi_connected / uptime_ms / free_mem resolved here —
+        those are hardware-ambient, so they live at the HTTP boundary, not in
+        the pure RuntimeState. Tolerates state=None (AP mode, boot.py).
+        """
+        data = self._state.snapshot() if self._state is not None else {"engine": None}
+        data["wifi_connected"] = wifi.is_connected()
+        data["uptime_ms"]      = _now_ms()
+        data["free_mem"]       = _free_mem()
+        _json_response(conn, data)
+
+    def _handle_pixels(self, conn):
+        """The colours on the LEDs plus the (v, e) source feeding each pixel.
+
+        `pixels` is the animator's actual output (state.last_colors) — which may
+        be an overlay (idle sparkle / error indicator), not the engine's mood
+        colours. `source_ve` comes from the engine's tiered per-pixel sources.
+        """
+        if self._state is not None:
+            pixels = [list(c) for c in self._state.last_colors]
+            source_ve = (self._state.engine.pixel_sources()
+                         if self._state.engine is not None else [None, None, None])
+        else:
+            pixels    = None
+            source_ve = [None, None, None]
+        _json_response(conn, {"pixels": pixels, "source_ve": source_ve})
+
+    def _handle_poll_log(self, conn, query):
+        """The poll ring buffer (#57), newest first, with an optional ?n= cap.
+
+        The full buffer serializes to ~12 KB worst case (M10 learning); ?n= lets
+        a probe pull just the newest few records.
+        """
+        log = self._state.poll_log_snapshot() if self._state is not None else []
+        log.reverse()   # poll_log_snapshot() is oldest-first; serve newest-first
+        n = _parse_form(query).get("n")
+        if n is not None:
+            try:
+                limit = max(0, min(int(n), len(log)))
+                log   = log[:limit]
+            except ValueError:
+                pass   # non-numeric ?n= → ignore, return the full log
+        _json_response(conn, log)
+
+    def _handle_config(self, conn):
+        """Current effective config with secrets redacted.
+
+        Non-secrets (ssid, client_id, mock_host) are shown plain. Secrets are
+        masked to "***" when set, "" when unset — so a reader learns *whether* a
+        credential exists without ever seeing its value. This masking IS the
+        access control that lets /config sit on the read-only runtime allowlist.
+        """
+        _json_response(conn, {
+            "wifi_ssid":             config.WIFI_SSID,
+            "wifi_password":         _mask(config.WIFI_PASSWORD),
+            "spotify_client_id":     config.SPOTIFY_CLIENT_ID,
+            "spotify_client_secret": _mask(config.SPOTIFY_CLIENT_SECRET),
+            "spotify_refresh_token": _mask(config.SPOTIFY_REFRESH_TOKEN),
+            "spotify_mock_host":     config.SPOTIFY_MOCK_HOST,
+        })
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _json_response(conn, obj):
+    """Send obj as a 200 application/json response."""
+    conn.send(
+        ("HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n"
+         + json.dumps(obj)).encode()
+    )
+
+
+def _mask(value):
+    """Redact a secret: '***' if present, '' if unset — never the value."""
+    return "***" if value else ""
+
 
 def _extract_body(raw):
     """Return everything after the blank header line."""

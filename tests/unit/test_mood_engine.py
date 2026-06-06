@@ -433,3 +433,55 @@ def test_reset_clears_last_poll_outcomes():
     assert engine.last_poll_outcomes() != []
     engine.reset()
     assert engine.last_poll_outcomes() == []
+
+
+# ── pixel_sources() — per-pixel (v, e) feeding the colour for #58's /pixels ──
+#
+# Mirrors _pixel_outputs()'s tier logic so a reader can see which (v, e) drove
+# each pixel: pixel 0 = now, pixel 1 = 1h EWMA once ≥1h of data, pixel 2 = 4h
+# EWMA once ≥4h. Returns lists (JSON-friendly) or None per pixel when idle.
+
+def test_pixel_sources_idle_all_none():
+    engine = _engine(("t1", 0.5, 0.5))
+    assert engine.pixel_sources() == [None, None, None]
+
+
+def test_pixel_sources_idle_after_only_misses():
+    engine = _engine(("t1", 0.5, 0.5))
+    _poll(engine, _p("miss"))
+    assert engine.pixel_sources() == [None, None, None]
+
+
+def test_pixel_sources_under_1h_all_now():
+    bundle = MMARBundle(build_bundle(("t1", 0.15, 0.85)))
+    engine = MoodEngine(bundle)
+    now    = list(bundle.lookup("t1"))
+    _poll(engine, _p("t1"))
+    assert engine.pixel_sources() == [now, now, now]
+
+
+def test_pixel_sources_between_1h_and_4h():
+    bundle = MMARBundle(build_bundle(("t1", 0.15, 0.85)))
+    engine = MoodEngine(bundle)
+    for _ in range(_POLLS_1H + 1):
+        _poll(engine, _p("t1"))
+    snap = engine.snapshot()
+    # pixel 0 = now_ve, pixels 1 & 2 = 1h EWMA (no 4h yet)
+    assert engine.pixel_sources() == [snap["now_ve"], snap["ewma_1h"], snap["ewma_1h"]]
+
+
+def test_pixel_sources_over_4h_uses_all_three():
+    bundle = MMARBundle(build_bundle(("t1", 0.15, 0.85)))
+    engine = MoodEngine(bundle)
+    for _ in range(_POLLS_4H + 1):
+        _poll(engine, _p("t1"))
+    snap = engine.snapshot()
+    assert engine.pixel_sources() == [snap["now_ve"], snap["ewma_1h"], snap["ewma_4h"]]
+
+
+def test_pixel_sources_json_round_trips():
+    engine = _engine(("t1", 0.3, 0.7))
+    for _ in range(_POLLS_4H + 1):
+        _poll(engine, _p("t1"))
+    src = engine.pixel_sources()
+    assert json.loads(json.dumps(src)) == src

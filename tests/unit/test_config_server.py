@@ -1,9 +1,15 @@
+import json
+
 import pytest
 from unittest.mock import MagicMock, patch
 
 import config_server
 import miss_log
 from config_server import ConfigServer, _parse_form, _urldecode, _extract_body
+from conftest import build_bundle
+from mmar          import MMARBundle
+from mood_engine   import MoodEngine
+from runtime_state import RuntimeState
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -533,3 +539,208 @@ def test_get_misses_empty_log_returns_empty_body():
     raw  = conn.send.call_args[0][0].decode()
     body = raw.split("\r\n\r\n", 1)[-1]
     assert body == ""
+
+
+# ── #58 introspection endpoints: /state, /pixels, /poll-log, /config ─────────
+#
+# Read-only JSON views of runtime state, served in BOTH setup and runtime modes
+# (they're on the _RUNTIME_ENDPOINTS allowlist). Each guards state=None so AP
+# mode (boot.py creates ConfigServer with no state) returns valid JSON, no crash.
+
+def _state_with_engine():
+    """A populated RuntimeState: one track hit polled through the engine."""
+    state        = RuntimeState()
+    state.engine = MoodEngine(MMARBundle(build_bundle(("t1", 0.3, 0.7))))
+    state.engine.update([("t1", "artist1")])
+    state.last_track_ids   = ["t1"]
+    state.last_poll_ms     = 12345
+    state.last_colors      = [(10, 20, 30), (40, 50, 60), (70, 80, 90)]
+    state.last_mood_colors = [(11, 22, 33), (44, 55, 66), (77, 88, 99)]
+    return state
+
+
+def _server(state=None, mode="setup"):
+    return ConfigServer(mode=mode, state=state, _sock=_mock_sock())
+
+
+def _dispatch_get(server, path):
+    """Dispatch a GET and return (header_text, parsed_json_body)."""
+    conn = MagicMock()
+    server._dispatch(conn, "GET %s HTTP/1.1\r\n\r\n" % path)
+    raw          = conn.send.call_args[0][0].decode()
+    header, body = raw.split("\r\n\r\n", 1)
+    return header, body
+
+
+def _get_json(server, path):
+    header, body = _dispatch_get(server, path)
+    assert "200" in header
+    assert "application/json" in header
+    return json.loads(body)
+
+
+# ── GET /state ───────────────────────────────────────────────────────────────
+
+def test_get_state_returns_json_200(monkeypatch):
+    monkeypatch.setattr(config_server.wifi, "is_connected", lambda: True)
+    data = _get_json(_server(_state_with_engine()), "/state")
+    # Superset: full RuntimeState.snapshot() plus ambient hardware fields.
+    for key in ("engine", "last_track_ids", "last_track_results", "last_poll_ms",
+                "last_colors", "last_mood_colors", "animator", "error_mode",
+                "wifi_connected", "uptime_ms", "free_mem"):
+        assert key in data
+
+
+def test_get_state_reports_wifi_and_engine(monkeypatch):
+    monkeypatch.setattr(config_server.wifi, "is_connected", lambda: True)
+    state = _state_with_engine()
+    data  = _get_json(_server(state), "/state")
+    assert data["wifi_connected"] is True
+    assert data["engine"] == state.engine.snapshot()
+    assert data["last_track_ids"] == ["t1"]
+    assert isinstance(data["uptime_ms"], int)
+
+
+def test_get_state_wifi_disconnected(monkeypatch):
+    monkeypatch.setattr(config_server.wifi, "is_connected", lambda: False)
+    data = _get_json(_server(_state_with_engine()), "/state")
+    assert data["wifi_connected"] is False
+
+
+def test_get_state_ap_mode_state_none(monkeypatch):
+    """boot.py serves /state with no state — must not crash; engine is null."""
+    monkeypatch.setattr(config_server.wifi, "is_connected", lambda: False)
+    data = _get_json(_server(state=None), "/state")
+    assert data["engine"] is None
+    assert "wifi_connected" in data and "uptime_ms" in data and "free_mem" in data
+
+
+def test_get_state_allowed_in_runtime_mode(monkeypatch):
+    monkeypatch.setattr(config_server.wifi, "is_connected", lambda: True)
+    header, _ = _dispatch_get(_server(_state_with_engine(), mode="runtime"), "/state")
+    assert "403" not in header
+
+
+# ── GET /pixels ──────────────────────────────────────────────────────────────
+
+def test_get_pixels_echoes_last_colors():
+    state = _state_with_engine()
+    data  = _get_json(_server(state), "/pixels")
+    assert data["pixels"] == [[10, 20, 30], [40, 50, 60], [70, 80, 90]]
+    assert len(data["source_ve"]) == 3
+
+
+def test_get_pixels_source_ve_reflects_engine():
+    state = _state_with_engine()
+    data  = _get_json(_server(state), "/pixels")
+    # One track hit, under the 1h threshold → all three pixels share now_ve.
+    expected = state.engine.pixel_sources()
+    assert data["source_ve"] == expected
+
+
+def test_get_pixels_ap_mode_state_none():
+    data = _get_json(_server(state=None), "/pixels")
+    assert data["source_ve"] == [None, None, None]
+
+
+def test_get_pixels_allowed_in_runtime_mode():
+    header, _ = _dispatch_get(_server(_state_with_engine(), mode="runtime"), "/pixels")
+    assert "403" not in header
+
+
+# ── GET /poll-log ────────────────────────────────────────────────────────────
+
+def _record(state, n):
+    state.record_poll(time_ms=n * 1000, track_ids=["t%d" % n],
+                      track_results=[(0.3, 0.7)],
+                      colors_after=[(1, 2, 3)] * 3, confidence_after=1.0, error=None)
+
+
+def test_get_poll_log_newest_first():
+    state = _state_with_engine()
+    for n in range(3):
+        _record(state, n)
+    data = _get_json(_server(state), "/poll-log")
+    assert [r["time_ms"] for r in data] == [2000, 1000, 0]   # newest first
+
+
+def test_get_poll_log_n_caps_to_newest():
+    state = _state_with_engine()
+    for n in range(5):
+        _record(state, n)
+    data = _get_json(_server(state), "/poll-log?n=2")
+    assert [r["time_ms"] for r in data] == [4000, 3000]
+
+
+def test_get_poll_log_n_over_length_returns_all():
+    state = _state_with_engine()
+    for n in range(3):
+        _record(state, n)
+    data = _get_json(_server(state), "/poll-log?n=999")
+    assert len(data) == 3
+
+
+def test_get_poll_log_ap_mode_state_none():
+    assert _get_json(_server(state=None), "/poll-log") == []
+
+
+def test_get_poll_log_allowed_in_runtime_mode():
+    header, _ = _dispatch_get(_server(_state_with_engine(), mode="runtime"), "/poll-log")
+    assert "403" not in header
+
+
+# ── GET /config — redacted ───────────────────────────────────────────────────
+
+_SECRETS = {
+    "wifi_password":         "hunter2_supersecret",
+    "spotify_client_secret": "csecret_abc123",
+    "spotify_refresh_token": "reftok_xyz789",
+}
+
+
+def _set_config(monkeypatch):
+    monkeypatch.setattr(config_server.config, "WIFI_SSID", "HomeNet")
+    monkeypatch.setattr(config_server.config, "WIFI_PASSWORD", _SECRETS["wifi_password"])
+    monkeypatch.setattr(config_server.config, "SPOTIFY_CLIENT_ID", "client_id_visible")
+    monkeypatch.setattr(config_server.config, "SPOTIFY_CLIENT_SECRET", _SECRETS["spotify_client_secret"])
+    monkeypatch.setattr(config_server.config, "SPOTIFY_REFRESH_TOKEN", _SECRETS["spotify_refresh_token"])
+    monkeypatch.setattr(config_server.config, "SPOTIFY_MOCK_HOST", "10.0.0.21:5000")
+
+
+def test_get_config_shows_nonsecrets_plain(monkeypatch):
+    _set_config(monkeypatch)
+    data = _get_json(_server(_state_with_engine()), "/config")
+    assert data["wifi_ssid"]         == "HomeNet"
+    assert data["spotify_client_id"] == "client_id_visible"
+    assert data["spotify_mock_host"] == "10.0.0.21:5000"
+
+
+def test_get_config_masks_secrets(monkeypatch):
+    _set_config(monkeypatch)
+    data = _get_json(_server(_state_with_engine()), "/config")
+    assert data["wifi_password"]         == "***"
+    assert data["spotify_client_secret"] == "***"
+    assert data["spotify_refresh_token"] == "***"
+
+
+def test_get_config_no_secret_values_in_response(monkeypatch):
+    """Acceptance criterion: scan the raw body for known secret values."""
+    _set_config(monkeypatch)
+    _, body = _dispatch_get(_server(_state_with_engine()), "/config")
+    for secret in _SECRETS.values():
+        assert secret not in body
+
+
+def test_get_config_unset_secret_is_empty(monkeypatch):
+    monkeypatch.setattr(config_server.config, "WIFI_PASSWORD", "")
+    monkeypatch.setattr(config_server.config, "SPOTIFY_REFRESH_TOKEN", "")
+    data = _get_json(_server(_state_with_engine()), "/config")
+    # Empty (not "***") so a reader can tell "no token" from "token present".
+    assert data["wifi_password"]         == ""
+    assert data["spotify_refresh_token"] == ""
+
+
+def test_get_config_allowed_in_runtime_mode(monkeypatch):
+    _set_config(monkeypatch)
+    header, _ = _dispatch_get(_server(_state_with_engine(), mode="runtime"), "/config")
+    assert "403" not in header

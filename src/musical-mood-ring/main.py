@@ -324,6 +324,8 @@ def main():
                 colors = blip_out
         _last_colors      = colors
         state.last_colors = colors
+        state.animator    = animator      # expose to /state (#58)
+        state.error_mode  = error_mode
         pixel.write(colors)
 
         _sleep_ms(FRAME_MS)

@@ -135,6 +135,28 @@ class MoodEngine:
         h4 = apply_confidence(mood_to_rgb(*self._ewma_4h.value), self._confidence)
         return (now, h1, h4)
 
+    def pixel_sources(self):
+        """Per-pixel (v, e) that fed each pixel's colour, for HTTP introspection.
+
+        Mirrors _pixel_outputs()'s tiering so the thresholds live in one place:
+            idle (no hits) → [None, None, None]
+            < 1h data      → [now, now, now]
+            1h–4h data     → [now, 1h,  1h]
+            > 4h data      → [now, 1h,  4h]
+        Values are lists (JSON-friendly), matching snapshot()'s convention.
+        """
+        n = self._hit_poll_count
+        if n == 0:
+            return [None, None, None]
+        now = list(self._now_ve)
+        if n <= _POLLS_1H:
+            return [now, now, now]
+        h1 = list(self._ewma_1h.value)
+        if n <= _POLLS_4H:
+            return [now, h1, h1]
+        h4 = list(self._ewma_4h.value)
+        return [now, h1, h4]
+
     def reset(self):
         """Reset all state. Called on bundle reload or sign-out."""
         self._ewma_1h.reset()
