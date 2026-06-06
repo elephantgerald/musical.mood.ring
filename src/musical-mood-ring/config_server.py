@@ -68,12 +68,18 @@ except ImportError:
 
 def _free_mem():
     fn = getattr(_gc, "mem_free", None) if _gc is not None else None
-    return fn() if fn is not None else None
+    if fn is None:
+        return None
+    try:
+        return fn()
+    except Exception:
+        return None   # diagnostic only — never let a memory probe sink /state
 
 import config
 import miss_log
 import wifi
 import spotify
+from runtime_state import RuntimeState
 
 # ── HTML templates ───────────────────────────────────────────────────────────
 
@@ -168,7 +174,8 @@ _HTML_403 = "HTTP/1.0 403 Forbidden\r\n\r\nConfiguration endpoints are disabled 
 # (method, path) tuples reachable while the device runs normally (mode="runtime").
 # Read-only only — anything that mutates config must be a setup-mode action so an
 # always-on LAN server can't be used to rewrite credentials or redirect traffic.
-# #58's introspection endpoints join this set — all read-only JSON GETs.
+# #58 adds /state, /pixels, /poll-log, /config — all read-only JSON GETs.
+# (/misses, the pre-existing entry, is read-only too but serves text/plain.)
 _RUNTIME_ENDPOINTS = {
     ("GET", "/misses"),
     ("GET", "/state"),
@@ -217,7 +224,15 @@ class ConfigServer:
             raw = conn.recv(1024).decode("utf-8", "ignore")
             self._dispatch(conn, raw)
         except Exception:
-            pass
+            # Surface a 500 rather than dropping the connection silently: the
+            # introspection endpoints exist to debug a console-less device, so a
+            # snapshot failure must be observable, not a phantom network blip.
+            # Best-effort — if a partial response was already sent, or send()
+            # itself is what failed, this no-ops.
+            try:
+                conn.send(b"HTTP/1.0 500 Internal Server Error\r\n\r\n")
+            except Exception:
+                pass
         finally:
             try:
                 conn.close()
@@ -390,9 +405,12 @@ class ConfigServer:
         Superset of RuntimeState.snapshot() (engine, last_* views, animator,
         error_mode) with wifi_connected / uptime_ms / free_mem resolved here —
         those are hardware-ambient, so they live at the HTTP boundary, not in
-        the pure RuntimeState. Tolerates state=None (AP mode, boot.py).
+        the pure RuntimeState. In AP mode (state=None, boot.py) a fresh
+        RuntimeState().snapshot() supplies the same key set with empty values, so
+        the response shape is identical whether or not the engine is running.
         """
-        data = self._state.snapshot() if self._state is not None else {"engine": None}
+        snap = self._state if self._state is not None else RuntimeState()
+        data = snap.snapshot()
         data["wifi_connected"] = wifi.is_connected()
         data["uptime_ms"]      = _now_ms()
         data["free_mem"]       = _free_mem()
@@ -410,25 +428,34 @@ class ConfigServer:
             source_ve = (self._state.engine.pixel_sources()
                          if self._state.engine is not None else [None, None, None])
         else:
-            pixels    = None
+            # AP mode: both fields keep the 3-slot shape (null per pixel) so a
+            # reader never has to special-case "no data" differently per field.
+            pixels    = [None, None, None]
             source_ve = [None, None, None]
         _json_response(conn, {"pixels": pixels, "source_ve": source_ve})
 
     def _handle_poll_log(self, conn, query):
         """The poll ring buffer (#57), newest first, with an optional ?n= cap.
 
-        The full buffer serializes to ~12 KB worst case (M10 learning); ?n= lets
-        a probe pull just the newest few records.
+        The full buffer is ~12 KB worst case (20 records × ~10 tracks each); ?n=
+        lets a probe pull just the newest few records. A malformed ?n= is a 400
+        rather than a silent fallback to the full buffer — silently ignoring a
+        cap on a debug endpoint would hand back the exact payload ?n= exists to
+        avoid, with no signal the cap was dropped.
         """
         log = self._state.poll_log_snapshot() if self._state is not None else []
         log.reverse()   # poll_log_snapshot() is oldest-first; serve newest-first
         n = _parse_form(query).get("n")
         if n is not None:
             try:
-                limit = max(0, min(int(n), len(log)))
-                log   = log[:limit]
+                count = int(n)
             except ValueError:
-                pass   # non-numeric ?n= → ignore, return the full log
+                count = -1
+            if count < 0:
+                conn.send(b"HTTP/1.0 400 Bad Request\r\n\r\n"
+                          b"?n= must be a non-negative integer")
+                return
+            log = log[:min(count, len(log))]
         _json_response(conn, log)
 
     def _handle_config(self, conn):

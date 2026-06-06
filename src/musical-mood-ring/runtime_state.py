@@ -66,6 +66,10 @@ class RuntimeState:
         on the ESP32; here at the HTTP boundary we rehydrate them to dicts so
         curl users get a self-describing response. Tuples become lists so
         json.dumps/loads round-trips cleanly.
+
+        The animator descriptor's "done" is tri-state: True/False for animators
+        that have a `done` flag, or None for those that run indefinitely (e.g. a
+        WIFI_LOST pulse) — read alongside "error_mode" to disambiguate.
         """
         if self.engine is not None:
             outcomes = [dict(zip(OUTCOME_FIELDS, o))
@@ -98,8 +102,13 @@ class RuntimeState:
 
         The record is built fully-owned and json.dumps()-able: input sequences
         are copied (a caller mutating them later can't corrupt a stored record)
-        and tuples are flattened to lists. Per the M10 learning, colors_after is
-        the engine's mood output, not the animator's last_colors overlay.
+        and tuples are flattened to lists. colors_after is the engine's mood
+        output (last_mood_colors), not the animator's last_colors overlay.
+
+        Note: this `error` vocabulary (None | "network" | "auth_fail") is a
+        poll-outcome label and is deliberately distinct from the animator-overlay
+        `error_mode` (None | "wifi_lost" | "auth_fail") above — they are not the
+        same enum and are intentionally not unified.
 
             time_ms          — ticks_ms when the poll ran
             track_ids        — [str, ...] polled (empty on auth/network failure)

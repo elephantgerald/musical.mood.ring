@@ -460,6 +460,26 @@ def test_pixel_sources_under_1h_all_now():
     assert engine.pixel_sources() == [now, now, now]
 
 
+def test_pixel_sources_at_exactly_1h_boundary():
+    """n == _POLLS_1H is still the <1h tier (all now) — guards a <=/< flip."""
+    bundle = MMARBundle(build_bundle(("t1", 0.15, 0.85)))
+    engine = MoodEngine(bundle)
+    for _ in range(_POLLS_1H):
+        _poll(engine, _p("t1"))
+    now = engine.snapshot()["now_ve"]
+    assert engine.pixel_sources() == [now, now, now]
+
+
+def test_pixel_sources_at_exactly_4h_boundary():
+    """n == _POLLS_4H is still the 1h tier (no 4h yet) — guards a <=/< flip."""
+    bundle = MMARBundle(build_bundle(("t1", 0.15, 0.85)))
+    engine = MoodEngine(bundle)
+    for _ in range(_POLLS_4H):
+        _poll(engine, _p("t1"))
+    snap = engine.snapshot()
+    assert engine.pixel_sources() == [snap["now_ve"], snap["ewma_1h"], snap["ewma_1h"]]
+
+
 def test_pixel_sources_between_1h_and_4h():
     bundle = MMARBundle(build_bundle(("t1", 0.15, 0.85)))
     engine = MoodEngine(bundle)

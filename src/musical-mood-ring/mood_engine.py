@@ -112,50 +112,49 @@ class MoodEngine:
 
         return self._pixel_outputs()
 
-    def _pixel_outputs(self):
+    def _tier_sources(self):
+        """The (v, e) source feeding each pixel — the single source of truth for
+        the pixel state machine that both _pixel_outputs() and pixel_sources()
+        branch on, so the tier ladder is defined exactly once:
+            idle (no hits) → (None, None, None)
+            < 1h data      → (now,  now, now)
+            1h–4h data     → (now,  1h,  1h)
+            > 4h data      → (now,  1h,  4h)
+        The idle (None, None, None) is deliberate: idle pixels show a synthetic
+        placeholder colour, not a (v, e) the engine actually observed — so there
+        is no "source" to report. _pixel_outputs() handles that one special case.
+        """
         n = self._hit_poll_count
-
         if n == 0:
-            # Inactive — no track-bundle hits yet.
+            return (None, None, None)
+        now = self._now_ve
+        if n <= _POLLS_1H:
+            return (now, now, now)
+        h1 = self._ewma_1h.value
+        if n <= _POLLS_4H:
+            return (now, h1, h1)
+        return (now, h1, self._ewma_4h.value)
+
+    def _pixel_outputs(self):
+        sources = self._tier_sources()
+        if sources[0] is None:
+            # Inactive — no track-bundle hits yet. Synthetic idle colour (not
+            # sourced from an observed (v, e); see _tier_sources()).
             idle = mood_to_rgb(0.5, synaesthesia.brightness_floor() /
                                (synaesthesia.brightness_floor() + synaesthesia.brightness_range()))
             idle = apply_confidence(idle, self._confidence)
             return (idle, idle, idle)
-
-        now = apply_confidence(mood_to_rgb(*self._now_ve), self._confidence)
-
-        if n <= _POLLS_1H:
-            return (now, now, now)
-
-        h1 = apply_confidence(mood_to_rgb(*self._ewma_1h.value), self._confidence)
-
-        if n <= _POLLS_4H:
-            return (now, h1, h1)
-
-        h4 = apply_confidence(mood_to_rgb(*self._ewma_4h.value), self._confidence)
-        return (now, h1, h4)
+        return tuple(apply_confidence(mood_to_rgb(v, e), self._confidence)
+                     for v, e in sources)
 
     def pixel_sources(self):
         """Per-pixel (v, e) that fed each pixel's colour, for HTTP introspection.
 
-        Mirrors _pixel_outputs()'s tiering so the thresholds live in one place:
-            idle (no hits) → [None, None, None]
-            < 1h data      → [now, now, now]
-            1h–4h data     → [now, 1h,  1h]
-            > 4h data      → [now, 1h,  4h]
-        Values are lists (JSON-friendly), matching snapshot()'s convention.
+        Derived from _tier_sources() (the shared tier ladder), with tuples
+        rendered as lists for JSON round-trip parity with snapshot(). Idle
+        pixels report None — they have no observed source (see _tier_sources()).
         """
-        n = self._hit_poll_count
-        if n == 0:
-            return [None, None, None]
-        now = list(self._now_ve)
-        if n <= _POLLS_1H:
-            return [now, now, now]
-        h1 = list(self._ewma_1h.value)
-        if n <= _POLLS_4H:
-            return [now, h1, h1]
-        h4 = list(self._ewma_4h.value)
-        return [now, h1, h4]
+        return [list(s) if s is not None else None for s in self._tier_sources()]
 
     def reset(self):
         """Reset all state. Called on bundle reload or sign-out."""

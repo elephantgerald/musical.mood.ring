@@ -615,6 +615,35 @@ def test_get_state_ap_mode_state_none(monkeypatch):
     assert "wifi_connected" in data and "uptime_ms" in data and "free_mem" in data
 
 
+def test_get_state_ap_mode_has_same_keys_as_populated(monkeypatch):
+    """Shape parity: AP-mode /state carries the full key set (null/empty
+    values), so a client keyed on the populated shape doesn't break in AP mode."""
+    monkeypatch.setattr(config_server.wifi, "is_connected", lambda: True)
+    populated = _get_json(_server(_state_with_engine()), "/state")
+    ap        = _get_json(_server(state=None), "/state")
+    assert set(ap.keys()) == set(populated.keys())
+
+
+def test_step_handler_exception_sends_500(monkeypatch):
+    """IMP-1: a handler exception surfaces a 500, not a silent dropped
+    connection — the introspection endpoints must fail observably."""
+    monkeypatch.setattr(config_server.wifi, "is_connected", lambda: True)
+
+    class _BoomState:
+        engine = None
+        def snapshot(self):
+            raise RuntimeError("boom")
+
+    conn = MagicMock()
+    conn.recv.return_value = b"GET /state HTTP/1.1\r\n\r\n"
+    sock = MagicMock()
+    sock.accept.return_value = (conn, ("10.0.0.5", 5000))
+    server = ConfigServer(mode="setup", state=_BoomState(), _sock=sock)
+    server.step()
+    sent = b"".join(c.args[0] for c in conn.send.call_args_list)
+    assert b"500" in sent
+
+
 def test_get_state_allowed_in_runtime_mode(monkeypatch):
     monkeypatch.setattr(config_server.wifi, "is_connected", lambda: True)
     header, _ = _dispatch_get(_server(_state_with_engine(), mode="runtime"), "/state")
@@ -640,7 +669,20 @@ def test_get_pixels_source_ve_reflects_engine():
 
 def test_get_pixels_ap_mode_state_none():
     data = _get_json(_server(state=None), "/pixels")
+    # Both fields keep the 3-slot shape in AP mode (symmetry, not None vs list).
+    assert data["pixels"]    == [None, None, None]
     assert data["source_ve"] == [None, None, None]
+
+
+def test_get_pixels_engine_idle_source_ve_all_null():
+    """Engine present but no track hits yet (the normal boot-to-first-hit
+    state) → idle → source_ve is all null, distinct from the state=None case."""
+    state        = RuntimeState()
+    state.engine = MoodEngine(MMARBundle(build_bundle(("t1", 0.3, 0.7))))
+    state.engine.update([("miss", "a1")])   # a miss keeps the engine idle
+    data = _get_json(_server(state), "/pixels")
+    assert data["source_ve"] == [None, None, None]
+    assert len(data["pixels"]) == 3
 
 
 def test_get_pixels_allowed_in_runtime_mode():
@@ -678,6 +720,35 @@ def test_get_poll_log_n_over_length_returns_all():
         _record(state, n)
     data = _get_json(_server(state), "/poll-log?n=999")
     assert len(data) == 3
+
+
+def test_get_poll_log_n_zero_returns_empty():
+    state = _state_with_engine()
+    for n in range(3):
+        _record(state, n)
+    assert _get_json(_server(state), "/poll-log?n=0") == []
+
+
+def test_get_poll_log_n_non_numeric_returns_400():
+    """IMP-2: a malformed cap is a 400, not a silent full-buffer dump."""
+    state = _state_with_engine()
+    for n in range(3):
+        _record(state, n)
+    header, body = _dispatch_get(_server(state), "/poll-log?n=ten")
+    assert "400" in header
+    assert "n=" in body  # explains the parameter
+
+
+def test_get_poll_log_n_negative_returns_400():
+    state = _state_with_engine()
+    _record(state, 0)
+    header, _ = _dispatch_get(_server(state), "/poll-log?n=-5")
+    assert "400" in header
+
+
+def test_get_poll_log_populated_state_empty_buffer_returns_empty():
+    """Real state, no polls recorded yet → empty array (not a crash)."""
+    assert _get_json(_server(_state_with_engine()), "/poll-log") == []
 
 
 def test_get_poll_log_ap_mode_state_none():
@@ -744,3 +815,17 @@ def test_get_config_allowed_in_runtime_mode(monkeypatch):
     _set_config(monkeypatch)
     header, _ = _dispatch_get(_server(_state_with_engine(), mode="runtime"), "/config")
     assert "403" not in header
+
+
+# ── IMP-3: the introspection paths are GET-only on the allowlist ─────────────
+
+@pytest.mark.parametrize("path", ["/state", "/pixels", "/poll-log", "/config"])
+def test_runtime_mode_blocks_mutating_verb_on_introspection_path(monkeypatch, path):
+    """Security regression: the new paths are allowlisted for GET only. A
+    non-GET verb to the same path must still 403 — guards against a future gate
+    refactor keying on path alone and silently opening a write surface."""
+    monkeypatch.setattr(config_server.config, "save", lambda d: None)
+    server = _server(_state_with_engine(), mode="runtime")
+    conn = MagicMock()
+    server._dispatch(conn, "POST %s HTTP/1.1\r\n\r\nx=1" % path)
+    assert "403" in conn.send.call_args[0][0].decode()
