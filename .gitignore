@@ -54,3 +54,13 @@ Desktop.ini
 *.swp
 *.swo
 *~
+
+# --- Claude Code local config (per-user; not shared) ---
+.claude/
+
+# --- Device runtime artifacts & notebook-generated plots ---
+misses.txt
+src/mood-model/*.png
+
+# pedantic-developer ephemeral session state
+work/focus.md

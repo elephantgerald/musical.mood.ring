@@ -1,0 +1,18 @@
+{
+  "name": "americana_hits",
+  "description": "High valence, medium-high energy. Expect warm golden and amber hues.",
+  "tracks": [
+    {"track_id": "3Jq9rsqmRtqcVKtzP9dnxZ", "artist_id": "", "title": "The Man Comes Around", "artist": "Johnny Cash"},
+    {"track_id": "5rDkA2TFOImbiVenmnE9r4", "artist_id": "", "title": "Ring of Fire", "artist": "Johnny Cash"},
+    {"track_id": "3dmqIB2Qxe2XZobw9gXxJ6", "artist_id": "", "title": "Mary Jane's Last Dance", "artist": "Tom Petty and the Heartbreakers"},
+    {"track_id": "5tVA6TkbaAH9QMITTQRrNv", "artist_id": "", "title": "Free Fallin'", "artist": "Tom Petty"},
+    {"track_id": "7MooGz4ZPE4bNxjFegR6Jx", "artist_id": "", "title": "You Don't Know How It Feels", "artist": "Tom Petty"},
+    {"track_id": "0GegHVxeozw3rdjte45Bfx", "artist_id": "", "title": "White Winter Hymnal", "artist": "Fleet Foxes"},
+    {"track_id": "02VdHwnGhy5fTW2CTZkYsb", "artist_id": "", "title": "Helplessness Blues", "artist": "Fleet Foxes"},
+    {"track_id": "291QmgURkDv4xxwV56kG5g", "artist_id": "", "title": "Beloved Woman", "artist": "Papa M"},
+    {"track_id": "3S9tVm9EGET8wSVLyOWgq7", "artist_id": "", "title": "Let's Move To The Country", "artist": "Smog"},
+    {"track_id": "0tiGMHPSE58LqcPQ2kgjaK", "artist_id": "", "title": "The Morning Paper", "artist": "Smog"},
+    {"track_id": "2lTnA8Z6rmjIvQRcEy3XLH", "artist_id": "", "title": "Dress Sexy At My Funeral", "artist": "Smog"},
+    {"track_id": "4161avFPychEPH5JUm9Xuw", "artist_id": "", "title": "Bluebird of Happiness", "artist": "Mojave 3"}
+  ]
+}

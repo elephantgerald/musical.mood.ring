@@ -118,6 +118,60 @@ def test_snapshot_copies_track_ids_not_aliases():
     assert state.last_track_ids == ["a", "b"]
 
 
+# ── animator + error_mode (#58 /state) ──────────────────────────────────────
+#
+# main.py writes the loop's resolved animator and error_mode each iteration so
+# /state can report what the ring is actually doing (mood transition? idle
+# sparkle? WIFI_LOST overlay?). The animator is reported as a {class, done}
+# descriptor — config_server stays ignorant of animator internals.
+
+class _FakeAnimator:
+    def __init__(self, done=False):
+        self.done = done
+
+
+def test_initial_animator_and_error_mode_are_none():
+    state = RuntimeState()
+    assert state.animator   is None
+    assert state.error_mode is None
+
+
+def test_snapshot_animator_none_and_error_mode_none():
+    snap = RuntimeState().snapshot()
+    assert snap["animator"]   is None
+    assert snap["error_mode"] is None
+
+
+def test_snapshot_animator_descriptor():
+    state = RuntimeState()
+    state.animator = _FakeAnimator(done=True)
+    snap = state.snapshot()
+    assert snap["animator"] == {"class": "_FakeAnimator", "done": True}
+
+
+def test_snapshot_animator_without_done_attr():
+    """getattr fallback: an animator with no `done` reports done=None."""
+    class _NoDone:
+        pass
+    state = RuntimeState()
+    state.animator = _NoDone()
+    assert state.snapshot()["animator"] == {"class": "_NoDone", "done": None}
+
+
+def test_snapshot_error_mode_passthrough():
+    state = RuntimeState()
+    state.error_mode = "wifi_lost"
+    assert state.snapshot()["error_mode"] == "wifi_lost"
+
+
+def test_snapshot_with_animator_round_trips_json():
+    state = RuntimeState()
+    state.animator   = _FakeAnimator(done=False)
+    state.error_mode = "auth_fail"
+    snap = state.snapshot()
+    assert json.loads(json.dumps(snap)) == snap
+
+
 # ── No circular imports between runtime_state, mood_engine, config_server ───
 #
 # The whole point of RuntimeState is that ConfigServer can read engine state

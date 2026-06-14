@@ -56,6 +56,8 @@ class RuntimeState:
         self.last_colors      = [(0, 0, 0)] * 3  # last colors written to pixels
         self.last_mood_colors = None             # last engine.update() return; None until first call
         self.poll_log         = []               # rolling list of the last _POLL_LOG_SIZE poll records
+        self.animator         = None             # active lights animator (main.py writes each frame)
+        self.error_mode       = None             # None | "wifi_lost" | "auth_fail"
 
     def snapshot(self):
         """JSON-serializable view of all runtime state.
@@ -64,6 +66,10 @@ class RuntimeState:
         on the ESP32; here at the HTTP boundary we rehydrate them to dicts so
         curl users get a self-describing response. Tuples become lists so
         json.dumps/loads round-trips cleanly.
+
+        The animator descriptor's "done" is tri-state: True/False for animators
+        that have a `done` flag, or None for those that run indefinitely (e.g. a
+        WIFI_LOST pulse) — read alongside "error_mode" to disambiguate.
         """
         if self.engine is not None:
             outcomes = [dict(zip(OUTCOME_FIELDS, o))
@@ -80,6 +86,10 @@ class RuntimeState:
             "last_colors":        [list(c) for c in self.last_colors],
             "last_mood_colors":   ([list(c) for c in self.last_mood_colors]
                                    if self.last_mood_colors is not None else None),
+            "animator":           (None if self.animator is None else
+                                   {"class": type(self.animator).__name__,
+                                    "done":  getattr(self.animator, "done", None)}),
+            "error_mode":         self.error_mode,
         }
 
     def record_poll(self, time_ms, track_ids, track_results, colors_after,
@@ -92,8 +102,13 @@ class RuntimeState:
 
         The record is built fully-owned and json.dumps()-able: input sequences
         are copied (a caller mutating them later can't corrupt a stored record)
-        and tuples are flattened to lists. Per the M10 learning, colors_after is
-        the engine's mood output, not the animator's last_colors overlay.
+        and tuples are flattened to lists. colors_after is the engine's mood
+        output (last_mood_colors), not the animator's last_colors overlay.
+
+        Note: this `error` vocabulary (None | "network" | "auth_fail") is a
+        poll-outcome label and is deliberately distinct from the animator-overlay
+        `error_mode` (None | "wifi_lost" | "auth_fail") above — they are not the
+        same enum and are intentionally not unified.
 
             time_ms          — ticks_ms when the poll ran
             track_ids        — [str, ...] polled (empty on auth/network failure)
