@@ -36,6 +36,7 @@ import config
 import pixel
 import spotify
 import wifi
+from clock         import Clock
 from config_server import ConfigServer
 from mmar          import load as mmar_load
 from mood_engine   import MoodEngine
@@ -49,11 +50,9 @@ ARTIST_BUNDLE_PATH = "artist-bundle.bin"
 
 try:
     import utime
-    def _now_ms():    return utime.ticks_ms()
     def _sleep_ms(ms): utime.sleep_ms(ms)
 except ImportError:
     import time
-    def _now_ms():    return int(time.time() * 1000)
     def _sleep_ms(ms): time.sleep(ms / 1000)
 
 try:
@@ -163,7 +162,7 @@ def run_poll_cycle(state, poller, access_token, expires_at, now_ms, wdt=None):
             poller.on_error(now_ms)
             poll_error = "network"
         else:
-            new_colors = state.engine.update(track_ids)
+            new_colors = state.engine.update(track_ids, now_ms)
             poller.on_success(now_ms)
             poll_track_ids = [tid for tid, _aid in track_ids]
             # (v, e) per track, order-aligned to track_ids; None on a full miss
@@ -205,8 +204,9 @@ def main():
     except OSError:
         pass   # artist bundle is optional — device works without it
 
+    clock        = Clock()
     state        = RuntimeState()
-    state.engine = MoodEngine(bundle, artist_bundle)
+    state.engine = MoodEngine(bundle, artist_bundle, clock=clock)
     poller       = Poller()
     # Open the config server in setup mode for a bounded window after boot, then
     # lock it to read-only runtime. The owner is physically present right after
@@ -230,12 +230,12 @@ def main():
     # Watchdog: reboots the device if the loop stalls for > 8 s
     _wdt = _machine.WDT(timeout=8000) if _HW else None
 
-    prev_ms = _now_ms()
+    prev_ms = clock.now_ms()
     _setup_deadline = prev_ms + _SETUP_GRACE_MS   # lock config server to read-only after this
     pixel.write([(0, 16, 0)] * 3)   # dim green: ready
 
     while True:
-        now_ms = _now_ms()
+        now_ms = clock.now_ms()
         dt_ms  = max(0, now_ms - prev_ms)
         prev_ms = now_ms
 
@@ -310,7 +310,7 @@ def main():
 
         # ── Handoff: startup flare → mood transition ──────────────────────
         if isinstance(animator, StartupFlare) and animator.done:
-            last = state.engine.update([])   # get current colours without a poll
+            last = state.engine.update([], now_ms)   # get current colours without a poll
             state.last_mood_colors = last
             animator = MoodTransition(last, last)
 
