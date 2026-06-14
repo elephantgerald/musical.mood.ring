@@ -1,0 +1,18 @@
+{
+  "name": "mood_journey",
+  "description": "Crosses multiple zones in sequence. Use fast-forward to step through segments and observe color transitions: americana (warm) → upbeat (energetic) → gazey (cool mid) → industrial (dark/aggressive).",
+  "tracks": [
+    {"track_id": "3Jq9rsqmRtqcVKtzP9dnxZ", "artist_id": "", "title": "The Man Comes Around",  "artist": "Johnny Cash"},
+    {"track_id": "5rDkA2TFOImbiVenmnE9r4", "artist_id": "", "title": "Ring of Fire",           "artist": "Johnny Cash"},
+    {"track_id": "3dmqIB2Qxe2XZobw9gXxJ6", "artist_id": "", "title": "Mary Jane's Last Dance", "artist": "Tom Petty and the Heartbreakers"},
+    {"track_id": "73mlvsfJM2qwlDUJxeaatI", "artist_id": "", "title": "Daft Punk Is Playing at My House", "artist": "LCD Soundsystem"},
+    {"track_id": "0IUAugkLGELvtFJfzPn2vi", "artist_id": "", "title": "Drunk Girls",            "artist": "LCD Soundsystem"},
+    {"track_id": "4H1ttBCmT7cqvGJLqfHbED", "artist_id": "", "title": "Super Bon Bon",          "artist": "Soul Coughing"},
+    {"track_id": "0wgHxBwNQJM1ZFuszBh4RH", "artist_id": "", "title": "Sunshine Smile",         "artist": "Adorable"},
+    {"track_id": "6U9BvIUHIgFohUojFessyO", "artist_id": "", "title": "Ginger",                 "artist": "Lilys"},
+    {"track_id": "6HhqiKpkJ37qa98TiuYla3", "artist_id": "", "title": "Pulling Our Weight",     "artist": "The Radio Dept."},
+    {"track_id": "2fGvd5akWRi63MUR8kTkC2", "artist_id": "", "title": "Carrion",                "artist": "Project Pitchfork"},
+    {"track_id": "6xEmSZageQYegdk0NlhbTp", "artist_id": "", "title": "Alpha Omega",            "artist": "Project Pitchfork"},
+    {"track_id": "35sLKeabRCu6USVhPTH50b", "artist_id": "", "title": "Eiland",                 "artist": "Xmal Deutschland"}
+  ]
+}

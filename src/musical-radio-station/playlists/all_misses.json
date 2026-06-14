@@ -1,0 +1,14 @@
+{
+  "name": "all_misses",
+  "description": "Tracks not in the MMAR bundle. Confidence stays near zero; pixels show near-white. Tests miss-log accumulation and low-confidence desaturation.",
+  "tracks": [
+    {"track_id": "MISS000000000000000001", "artist_id": "", "title": "Unknown Track 1", "artist": "Unknown Artist"},
+    {"track_id": "MISS000000000000000002", "artist_id": "", "title": "Unknown Track 2", "artist": "Unknown Artist"},
+    {"track_id": "MISS000000000000000003", "artist_id": "", "title": "Unknown Track 3", "artist": "Unknown Artist"},
+    {"track_id": "MISS000000000000000004", "artist_id": "", "title": "Unknown Track 4", "artist": "Unknown Artist"},
+    {"track_id": "MISS000000000000000005", "artist_id": "", "title": "Unknown Track 5", "artist": "Unknown Artist"},
+    {"track_id": "MISS000000000000000006", "artist_id": "", "title": "Unknown Track 6", "artist": "Unknown Artist"},
+    {"track_id": "MISS000000000000000007", "artist_id": "", "title": "Unknown Track 7", "artist": "Unknown Artist"},
+    {"track_id": "MISS000000000000000008", "artist_id": "", "title": "Unknown Track 8", "artist": "Unknown Artist"}
+  ]
+}
