@@ -28,7 +28,7 @@
 # Graceful degradation: after a sustained Spotify outage (no successful poll for
 # ~15 min) the ring calms to idle sparkle rather than holding stale colours. This
 # looks like "no music," but the failure is not hidden — every poll outcome is
-# recorded to the poll log (#57) and surfaced over HTTP (#58).
+# recorded to the poll log (#57), readable via dev/fake_board.py.
 
 import gc
 
@@ -213,7 +213,7 @@ def main():
     # power-on, so this is when re-configuration (Spotify OAuth, mock host) is
     # legitimate; for the rest of the device's uptime only read-only endpoints
     # are served. See ConfigServer.lock_runtime() and _SETUP_GRACE_MS.
-    cfg_server   = ConfigServer(mode="setup", state=state)
+    cfg_server   = ConfigServer(mode="setup")
     access_token = None
     expires_at   = 0
 
@@ -324,8 +324,6 @@ def main():
                 colors = blip_out
         _last_colors      = colors
         state.last_colors = colors
-        state.animator    = animator      # expose to /state (#58)
-        state.error_mode  = error_mode
         pixel.write(colors)
 
         _sleep_ms(FRAME_MS)

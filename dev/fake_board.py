@@ -46,6 +46,47 @@ def _swatch(rgb):
     return "\033[48;2;{};{};{}m   \033[0m {:>3},{:>3},{:>3}".format(r, g, b, r, g, b)
 
 
+def _panel(colors, labels):
+    """Three side-by-side truecolor bars — a tiny visual of the physical LEDs.
+
+    Returns a multi-line string: stacked color rows, then the pixel label and
+    its RGB triple centred under each bar.
+    """
+    WIDTH, HEIGHT, GAP = 12, 3, "  "
+    bars = ["\033[48;2;{};{};{}m{}\033[0m".format(r, g, b, " " * WIDTH)
+            for (r, g, b) in colors]
+    rows = [GAP + GAP.join(bars) for _ in range(HEIGHT)]
+    rows.append(GAP + GAP.join("{:^{}}".format(l, WIDTH) for l in labels))
+    rows.append(GAP + GAP.join("{:^{}}".format("{},{},{}".format(*c), WIDTH)
+                               for c in colors))
+    return "\n".join(rows)
+
+
+def _tier_label(sources, snap):
+    """Which averaging tier each pixel is currently showing.
+
+    Read back from the engine's own pixel_sources() rather than recomputed from
+    elapsed time — the engine gates its tiers on time since the FIRST TRACK HIT,
+    not since the run started, so any local threshold arithmetic here would
+    disagree with the board as soon as the opening polls miss the bundle.
+    """
+    if sources[0] is None:
+        return "idle — no bundle hits yet"
+    names = []
+    for src in sources:
+        if   src == snap["now_ve"]:  names.append("now")
+        elif src == snap["ewma_1h"]: names.append("1h")
+        elif src == snap["ewma_4h"]: names.append("4h")
+        else:                        names.append("?")
+    label = "/".join(names)
+    # The two averages landing on the same value makes the 1h/4h split invisible
+    # here — and is itself worth seeing, since it means the window is being fed
+    # the same tracks repeatedly rather than a moving history.
+    if snap["ewma_1h"] == snap["ewma_4h"]:
+        label += "   [1h≡4h converged]"
+    return label
+
+
 def _http_control(mock, method, path):
     """Best-effort call to a mock /control endpoint (scenario stepping)."""
     import requests
@@ -70,6 +111,9 @@ def main():
                          "the 1h/4h pixel tiers in a handful of polls.")
     ap.add_argument("--advance", type=int, default=0,
                     help="fast-forward the mock by N tracks between polls (shows motion)")
+    ap.add_argument("--visual", action="store_true",
+                    help="redraw a 3-bar color panel in place each poll (looks like "
+                         "the device) instead of the scrolling verbose log")
     ap.add_argument("--bundle", default=None, help="memory-bundle.bin (default: newest in data/)")
     ap.add_argument("--artist-bundle", default=None, help="artist-bundle.bin (default: newest in data/)")
     args = ap.parse_args()
@@ -121,30 +165,47 @@ def main():
 
             snap = state.engine.snapshot()
             elapsed_min = now_ms / 60000.0
-            print("── poll {} (sim t+{:.0f} min) ───────────────────────".format(n, elapsed_min))
-            if err:
-                print("  outcome: ERROR ({})".format(err))
+            colors = result["new_colors"] or [(0, 0, 0)] * 3
+            outcomes = state.engine.last_poll_outcomes()
+            hits = sum(1 for o in outcomes if o[2] != "miss")
+            sources = state.engine.pixel_sources()
+            tier = _tier_label(sources, snap)
+
+            if args.visual:
+                # Redraw a fixed panel in place: clear screen, home cursor.
+                print("\033[2J\033[H", end="")
+                print("fake board → {}   poll {}   sim t+{:.0f} min".format(
+                    args.mock, n, elapsed_min))
+                if err:
+                    print("\noutcome: ERROR ({})\n".format(err))
+                    print(_panel([(0, 0, 0)] * 3, ["NOW", "1h", "4h"]))
+                else:
+                    print("outcome: ok — {}/{} hit  confidence={:.2f}  tier={}\n".format(
+                        hits, len(outcomes), snap["confidence"], tier))
+                    print(_panel(colors, ["NOW", "1h", "4h"]))
+                    print("\n  source (v,e) per pixel: {}".format(
+                        "  ".join("—" if s is None else "({:.2f},{:.2f})".format(*s)
+                                  for s in sources)))
+                sys.stdout.flush()
             else:
-                colors = result["new_colors"] or [(0, 0, 0)] * 3
-                outcomes = state.engine.last_poll_outcomes()
-                hits = sum(1 for o in outcomes if o[2] != "miss")
-                print("  outcome: ok — {}/{} tracks hit bundle, confidence={:.2f}"
-                      .format(hits, len(outcomes), snap["confidence"]))
-                tier = ("now/now/now (<1h)"   if elapsed_min < 60
-                        else "now/1h/1h (1-4h)" if elapsed_min < 240
-                        else "now/1h/4h (>4h)")
-                print("    tier: {}".format(tier))
-                for i, c in enumerate(colors, 1):
-                    print("    pixel {}: {}".format(i, _swatch(c)))
-                print("    now_ve={}  ewma_1h={}  ewma_4h={}".format(
-                    snap["now_ve"],
-                    [round(x, 3) for x in snap["ewma_1h"]],
-                    [round(x, 3) for x in snap["ewma_4h"]]))
-                # show the tracks that drove this poll (first few)
-                for o in outcomes[:4]:
-                    tid, aid, src, v, e = o
-                    ve = "({:.2f},{:.2f})".format(v, e) if v is not None else "—"
-                    print("      {:<24} {:<6} {}".format(tid, src, ve))
+                print("── poll {} (sim t+{:.0f} min) ───────────────────────".format(n, elapsed_min))
+                if err:
+                    print("  outcome: ERROR ({})".format(err))
+                else:
+                    print("  outcome: ok — {}/{} tracks hit bundle, confidence={:.2f}"
+                          .format(hits, len(outcomes), snap["confidence"]))
+                    print("    tier: {}".format(tier))
+                    for i, c in enumerate(colors, 1):
+                        print("    pixel {}: {}".format(i, _swatch(c)))
+                    print("    now_ve={}  ewma_1h={}  ewma_4h={}".format(
+                        snap["now_ve"],
+                        [round(x, 3) for x in snap["ewma_1h"]],
+                        [round(x, 3) for x in snap["ewma_4h"]]))
+                    # show the tracks that drove this poll (first few)
+                    for o in outcomes[:4]:
+                        tid, aid, src, v, e = o
+                        ve = "({:.2f},{:.2f})".format(v, e) if v is not None else "—"
+                        print("      {:<24} {:<6} {}".format(tid, src, ve))
 
             if args.advance and (args.polls == 0 or n < args.polls):
                 _http_control(args.mock, "POST", "/control/fast-forward")

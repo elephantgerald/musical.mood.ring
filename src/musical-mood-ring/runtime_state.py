@@ -2,17 +2,16 @@
 #
 # Shared runtime state for musical-mood-ring.
 #
-# main.py owns and mutates a RuntimeState. ConfigServer receives a reference
-# and reads from it to serve the introspection endpoints (#58). The point of
-# this module: config_server and mood_engine never import each other —
-# runtime_state imports OUTCOME_FIELDS from mood_engine (one direction only,
-# no cycle), and config_server only imports runtime_state. That keeps the
-# engine's hot path free of HTTP/server code and lets ConfigServer remain
-# ignorant of MoodEngine's internals.
+# main.py owns and mutates a RuntimeState; dev/fake_board.py builds one to run
+# the same poll cycle in CPython. It carries the last-poll view and the rolling
+# poll log (#57) so a reader can see what the engine did without reaching into
+# MoodEngine's internals. runtime_state imports OUTCOME_FIELDS from mood_engine
+# (one direction only, no cycle), keeping the engine's hot path free of any
+# reporting concern.
 #
-# Convention: ConfigServer treats every field as read-only. Python doesn't
-# enforce this without a type checker — discipline lives in the docstring
-# and in code review.
+# Convention: readers treat every field as read-only. Python doesn't enforce
+# this without a type checker — discipline lives in the docstring and in code
+# review.
 #
 # Pure Python — no hardware dependencies. Safe to import in CPython tests.
 
@@ -22,9 +21,7 @@ from mood_engine import OUTCOME_FIELDS
 # Depth of the rolling poll log (#57). recently_played() returns ≤10 tracks, so
 # a record is ~350 B typical, ~580 B worst case (10 IDs + their (v,e) pairs).
 # 20 records covers the last hour at the default 3-minute cadence. The whole log
-# is a handful of KB of small dicts in RAM — well within the ESP32 budget; only
-# the transient JSON of a full /poll-log response approaches ~12 KB, which the
-# board serves without trouble.
+# is a handful of KB of small dicts in RAM — well within the ESP32 budget.
 _POLL_LOG_SIZE = 20
 
 
@@ -56,8 +53,6 @@ class RuntimeState:
         self.last_colors      = [(0, 0, 0)] * 3  # last colors written to pixels
         self.last_mood_colors = None             # last engine.update() return; None until first call
         self.poll_log         = []               # rolling list of the last _POLL_LOG_SIZE poll records
-        self.animator         = None             # active lights animator (main.py writes each frame)
-        self.error_mode       = None             # None | "wifi_lost" | "auth_fail"
 
     def snapshot(self):
         """JSON-serializable view of all runtime state.
@@ -66,10 +61,6 @@ class RuntimeState:
         on the ESP32; here at the HTTP boundary we rehydrate them to dicts so
         curl users get a self-describing response. Tuples become lists so
         json.dumps/loads round-trips cleanly.
-
-        The animator descriptor's "done" is tri-state: True/False for animators
-        that have a `done` flag, or None for those that run indefinitely (e.g. a
-        WIFI_LOST pulse) — read alongside "error_mode" to disambiguate.
         """
         if self.engine is not None:
             outcomes = [dict(zip(OUTCOME_FIELDS, o))
@@ -86,10 +77,6 @@ class RuntimeState:
             "last_colors":        [list(c) for c in self.last_colors],
             "last_mood_colors":   ([list(c) for c in self.last_mood_colors]
                                    if self.last_mood_colors is not None else None),
-            "animator":           (None if self.animator is None else
-                                   {"class": type(self.animator).__name__,
-                                    "done":  getattr(self.animator, "done", None)}),
-            "error_mode":         self.error_mode,
         }
 
     def record_poll(self, time_ms, track_ids, track_results, colors_after,
@@ -106,9 +93,9 @@ class RuntimeState:
         output (last_mood_colors), not the animator's last_colors overlay.
 
         Note: this `error` vocabulary (None | "network" | "auth_fail") is a
-        poll-outcome label and is deliberately distinct from the animator-overlay
-        `error_mode` (None | "wifi_lost" | "auth_fail") above — they are not the
-        same enum and are intentionally not unified.
+        poll-outcome label, deliberately distinct from main.py's animator-overlay
+        `error_mode` (None | "wifi_lost" | "auth_fail") — not the same enum, and
+        intentionally not unified.
 
             time_ms          — ticks_ms when the poll ran
             track_ids        — [str, ...] polled (empty on auth/network failure)
@@ -140,8 +127,8 @@ class RuntimeState:
 
         Each record is rebuilt with fresh nested lists so a reader can't mutate
         the live log — the same deep-copy-to-JSON-ready discipline snapshot()
-        applies to last_colors. Kept separate from snapshot() so /state stays
-        lean and #58's /poll-log endpoint serves this buffer on its own.
+        applies to last_colors. Kept separate from snapshot() so a caller that
+        only wants current state doesn't pay to copy the whole buffer.
         """
         return [
             {

@@ -182,11 +182,12 @@ class MoodEngine:
                      for v, e in sources)
 
     def pixel_sources(self):
-        """Per-pixel (v, e) that fed each pixel's colour, for HTTP introspection.
+        """Per-pixel (v, e) that fed each pixel's colour.
 
         Derived from _tier_sources() (the shared tier ladder), with tuples
         rendered as lists for JSON round-trip parity with snapshot(). Idle
         pixels report None — they have no observed source (see _tier_sources()).
+        Used by dev/fake_board.py to label each simulated pixel.
         """
         return [list(s) if s is not None else None for s in self._tier_sources()]
 
@@ -202,7 +203,7 @@ class MoodEngine:
         self._last_outcomes  = []
 
     def snapshot(self):
-        """JSON-serializable view of internal state for HTTP introspection.
+        """JSON-serializable view of internal state, for offline inspection.
 
         Tuples become lists so the dict round-trips through json.dumps/loads
         cleanly (json decodes arrays to lists, so storing lists here keeps
