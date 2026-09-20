@@ -173,10 +173,10 @@ class MoodEngine:
         sources = self._tier_sources(now_ms)
         if sources[0] is None:
             # Inactive — no track-bundle hits yet. Synthetic idle colour (not
-            # sourced from an observed (v, e); see _tier_sources()).
-            idle = mood_to_rgb(0.5, synaesthesia.brightness_floor() /
-                               (synaesthesia.brightness_floor() + synaesthesia.brightness_range()))
-            idle = apply_confidence(idle, self._confidence)
+            # sourced from an observed (v, e); see _tier_sources()). Neutral
+            # valence at zero energy is θ=270° — the ambient anchor, at the
+            # dimmest end of the energy tilt.
+            idle = apply_confidence(mood_to_rgb(0.5, 0.0), self._confidence)
             return (idle, idle, idle)
         return tuple(apply_confidence(mood_to_rgb(v, e), self._confidence)
                      for v, e in sources)
