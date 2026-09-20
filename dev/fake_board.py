@@ -23,6 +23,7 @@ loopback/RFC1918 targets; we set it to 127.0.0.1:5000 in-process below.
 
 import argparse
 import glob
+import json
 import os
 import sys
 import time
@@ -30,6 +31,7 @@ import time
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIRMWARE  = os.path.join(REPO_ROOT, "src", "musical-mood-ring")
 BUNDLE_DIR = os.path.join(REPO_ROOT, "data", "musical-memory-bundle")
+SYNTH_DIR  = os.path.join(REPO_ROOT, "data", "synaesthesia")
 
 sys.path.insert(0, FIRMWARE)
 
@@ -38,6 +40,35 @@ def _newest(pattern):
     """Newest bundle matching pattern in BUNDLE_DIR, or None."""
     hits = sorted(glob.glob(os.path.join(BUNDLE_DIR, pattern)))
     return hits[-1] if hits else None
+
+
+def _default_profile_path():
+    """The profile build/deploy.sh would flash: first data/synaesthesia/synaesthesia-*.json."""
+    hits = sorted(glob.glob(os.path.join(SYNTH_DIR, "synaesthesia-*.json")))
+    return hits[0] if hits else None
+
+
+def _load_profile(arg):
+    """Point synaesthesia at the same profile the device runs. Returns (path, note).
+
+    Without this the harness silently falls back to synaesthesia._DEFAULT while
+    the board runs the flashed personal profile, so identical tracks render as
+    different colours on each side and no mock-vs-board comparison means
+    anything. Accessors read the module-level _p at call time, so replacing it
+    after import is enough — but it must happen before the first colour is
+    computed.
+    """
+    import synaesthesia
+    if arg == "default":
+        return None, "built-in default (forced)"
+    path = arg or _default_profile_path()
+    if not path:
+        return None, "built-in default (no data/synaesthesia/synaesthesia-*.json)"
+    if not os.path.exists(path):
+        sys.exit("Profile not found: {}".format(path))
+    with open(path) as f:
+        synaesthesia._p = json.load(f)
+    return path, "{} (name={})".format(os.path.basename(path), synaesthesia.profile_name())
 
 
 def _swatch(rgb):
@@ -116,6 +147,10 @@ def main():
                          "the device) instead of the scrolling verbose log")
     ap.add_argument("--bundle", default=None, help="memory-bundle.bin (default: newest in data/)")
     ap.add_argument("--artist-bundle", default=None, help="artist-bundle.bin (default: newest in data/)")
+    ap.add_argument("--profile", default=None,
+                    help="synaesthesia profile JSON (default: the same file build/deploy.sh "
+                         "flashes — first data/synaesthesia/synaesthesia-*.json). Pass "
+                         "'default' to force the built-in profile.")
     args = ap.parse_args()
 
     # ── Point the firmware at the mock (loopback ⇒ _mock_host_ok) ───────────────
@@ -137,6 +172,8 @@ def main():
     if not bundle_path:
         sys.exit("No memory bundle found in {} — run src/musical-bottler/bottle.py".format(BUNDLE_DIR))
 
+    profile_path, profile_note = _load_profile(args.profile)
+
     bundle        = mmar_load(bundle_path)
     artist_bundle = mmar_load(artist_path) if artist_path else None
 
@@ -151,6 +188,7 @@ def main():
     print("fake board → mock {}".format(args.mock))
     print("  bundle:        {}".format(os.path.basename(bundle_path)))
     print("  artist bundle: {}".format(os.path.basename(artist_path) if artist_path else "(none)"))
+    print("  profile:       {}".format(profile_note))
     print("  pixels: [1]=now  [2]=1h EWMA  [3]=4h EWMA\n")
 
     n = 0
