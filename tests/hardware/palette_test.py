@@ -175,4 +175,12 @@ def main():
         print("pixels off.")
 
 
-main()
+# Importable so a stage can be run on its own — stepping through them one at a
+# time is how you actually judge a colour, and a 3-minute loop is not that:
+#     mpremote connect /dev/ttyACM0 cp tests/hardware/palette_test.py :/
+#     mpremote connect /dev/ttyACM0 exec "import palette_test; palette_test.knot_walk()"
+STAGES = (knot_walk, tightest_pairs, confidence_ladder,
+          gamma_ab, brightness_ladder, theta_sweep)
+
+if __name__ == "__main__":
+    main()
