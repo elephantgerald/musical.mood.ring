@@ -49,6 +49,17 @@ _PATH = "synaesthesia.json"
 # on hardware: a pair at 0.064 read as one colour, a pair at 0.182 read as
 # two. This table's worst pair is 0.251. dE ranked those two pairs backwards.
 #
+# Two caveats the bench added, both about SIMULTANEOUS adjacency -- which is
+# the operating condition, since all three pixels are lit at once:
+#   - Sequential and side-by-side are different tests. A pair can pass a walk
+#     and fail when two pixels show it at the same time.
+#   - Blues need more margin than warm colours. darkwave/indie-melancholy read
+#     as near-identical at 0.361 while fun/dance/industrial passed easily at
+#     0.251. Fixed by DESATURATING indie-melancholy (0.361 -> 0.548), which
+#     moves chromaticity toward neutral without touching hue order. The floor
+#     on that move is the zero-confidence grey: it must stay >0.25 away, or a
+#     confident colour starts reading as a miss.
+#
 # Every zone stays at V>=0.55 and S>=0.15 so none lands in the brown/mud band
 # or collides with the near-grey the ring shows at zero confidence.
 
@@ -78,7 +89,7 @@ _DEFAULT = {
         [135.0, "#F00001"],   # industrial        red
         [153.4, "#BA0EAD"],   # shoegaze          magenta
         [168.7, "#2E04F0"],   # darkwave          cobalt
-        [180.0, "#2187D7"],   # indie-melancholy  pale blue
+        [180.0, "#7EC2F2"],   # indie-melancholy  drained pale blue
         [206.6, "#1CEDB9"],   # zone-out          cyan
         [270.0, "#1DDB56"],   # ambient           mint
         [323.1, "#8BC700"],   # americana         green-gold

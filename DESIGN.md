@@ -291,7 +291,7 @@ The shipped `color_map`. Each knot sits at its zone's own direction in (V, E) sp
 | Industrial | Front Line Assembly, Ministry | (0.15, 0.85) | 135.0° | Red | `#F00001` |
 | Shoegaze | My Bloody Valentine, Slowdive | (0.30, 0.60) | 153.4° | Magenta | `#BA0EAD` |
 | Darkwave | TR/ST, Depeche Mode | (0.25, 0.55) | 168.7° | Cobalt | `#2E04F0` |
-| Indie melancholy | Yo La Tengo, Cocteau Twins, NewDad | (0.35, 0.50) | 180.0° | Pale blue | `#2187D7` |
+| Indie melancholy | Yo La Tengo, Cocteau Twins, NewDad | (0.35, 0.50) | 180.0° | Drained pale blue | `#7EC2F2` |
 | Zone-out / groovy | Orb, DJ Shadow, Amon Tobin, BOC | (0.40, 0.45) | 206.6° | Cyan | `#1CEDB9` |
 | Ambient / relaxing | Robert Fripp, Ulrich Schnauss | (0.50, 0.15) | 270.0° | Mint | `#1DDB56` |
 | Americana / folksy | Fleet Foxes, Josh Ritter, Tom Petty | (0.70, 0.35) | 323.1° | Green-gold | `#8BC700` |
