@@ -11,14 +11,30 @@
 # Transfer function. color.py emits sRGB — what the ring should look like.
 # A WS2812B's PWM duty is linear in the byte it is given, so handing it an
 # sRGB byte directly over-brightens every mid-tone and washes the palette
-# pale: #70AFC4 would emit as if it were (0.44, 0.69, 0.77) of full power
-# instead of (0.15, 0.43, 0.56). That flattens exactly the pastels the
-# calibrated palette depends on, so _GAMMA is applied here, once, on the way
-# out. Set _GAMMA_CORRECT = False on the bench to see the raw bytes.
+# pale: indie-melancholy's #7EC2F2 would emit as if it were (0.49, 0.76, 0.95)
+# of full power instead of (0.21, 0.54, 0.89). That flattens exactly the
+# pastels the calibrated palette depends on, so _GAMMA is applied here, once,
+# on the way out. Set _GAMMA_CORRECT = False on the bench to see the raw bytes.
 
 _NUM_PIXELS = 3
 _PIN        = 4   # GPIO number — adjust for final wiring
 
+# Leave this ON. It looks like a taste flag and is not one -- it exists so the
+# bench can A/B it, and the bench settled the question (issue #9, on a XIAO C3
+# behind diffusion):
+#
+#   - Turning it off shifts every knot's CHROMATICITY, by up to 0.237
+#     (fun/dance) and 0.196 (darkwave) -- more than the 0.20 floor the whole
+#     palette is spaced on. Observed as darkwave going "a nice clean blue,
+#     then more of a purple": with no correction the near-off red channel
+#     rises 5 -> 39 and drags the hue violet.
+#   - It also collapses the margin against the zero-confidence grey.
+#     indie-melancholy sits 0.291 from that grey with gamma on and 0.149
+#     without -- under the 0.25 floor, so a CONFIDENT colour would read as a
+#     miss. Observed as "sky blue then basically white".
+#
+# So gamma is load-bearing twice over: hue fidelity at the dark end, and
+# keeping real colours distinct from the miss colour.
 _GAMMA_CORRECT = True
 
 # sRGB byte → linear-light byte. Table built once; 256 entries is cheaper

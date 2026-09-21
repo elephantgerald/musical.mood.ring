@@ -109,7 +109,7 @@ def gamma_ab():
     print("    say so — that is a real finding and the flag exists for it.")
     saved = pixel._GAMMA_CORRECT
     try:
-        for theta in (180.0, 270.0, 206.6, 135.0):
+        for theta in (135.0, 168.7, 180.0, 270.0):
             name = _LABEL.get(theta, "?")
             for on in (True, False):
                 pixel._GAMMA_CORRECT = on

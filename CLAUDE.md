@@ -143,7 +143,7 @@ jupyter notebook src/mood-model/m0_calibration.ipynb
 - `synaesthesia.py` — colour profile loader (see below)
 
 **Hardware glue — thin try/except wrappers, no-op in CPython:**
-- `pixel.py` — NeoPixel WS2812B driver (`write(colors)`, `off()`); clamps to [0, 255]. Owns the LED transfer function: `color.py` emits sRGB, but WS2812B duty is **linear in the byte**, so `to_duty()` converts via a 256-entry table built at import. Without it every mid-tone over-brightens and the palette washes pale. `_GAMMA_CORRECT = False` disables it for bench comparison
+- `pixel.py` — NeoPixel WS2812B driver (`write(colors)`, `off()`); clamps to [0, 255]. Owns the LED transfer function: `color.py` emits sRGB, but WS2812B duty is **linear in the byte**, so `to_duty()` converts via a 256-entry table built at import. Without it every mid-tone over-brightens and the palette washes pale. `_GAMMA_CORRECT = False` disables it for bench comparison, but the bench has settled it: off, chromaticity shifts by up to 0.237 (more than the palette's 0.20 separation floor) and indie-melancholy falls to 0.149 from the zero-confidence grey, so a confident colour reads as a miss
 - `wifi.py` — `connect(ssid, password)`, `is_connected()`, `try_connect(ssid, password)`
 - `ap.py` — `allow_configure()` / `disallow_configure()` (AP_IF wrapper)
 - `mdns.py` — `start(hostname)` / `stop()` (mDNS advertisement)
