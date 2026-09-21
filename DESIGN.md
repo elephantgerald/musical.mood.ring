@@ -85,7 +85,7 @@ main.py
       ↓  first track-bundle hit after idle
   startup flare  (3 s fade-in from black)
       ↓  flare complete
-  mood transition  (60 s smooth HSV crossfade to current target)
+  mood transition  (60 s crossfade in CIELAB to current target)
       ↑  target updated each successful poll
 
 Error overlays (exit to idle sparkle when condition clears):
@@ -114,13 +114,17 @@ src/musical-mood-ring/
 ├── spotify.py        # Spotify API: auth_url / exchange_code / recently_played / refresh_token
 ├── mmar.py           # MMAR bundle: fnv1a_64 hash + binary search lookup
 ├── mood_engine.py    # Two-tier lookup → confidence scalar → EWMA → 3×RGB
-├── color.py          # mood_to_rgb(v, e) → (r, g, b); apply_confidence(rgb, c)
+├── runtime_state.py  # Last-poll view + rolling 20-entry poll log (for the harness)
+├── color.py          # mood_to_rgb(v, e) → sRGB via CIELAB; apply_confidence(rgb, c)
 ├── polar.py          # to_polar(v, e) → (r, theta_deg)
-├── ewma.py           # EWMA accumulator; snap-on-first-update; reset()
+├── ewma.py           # Time-weighted EWMA(tau_ms); snap-on-first-update; reset()
+├── clock.py          # Pluggable monotonic ms clock; FakeClock for tests/harness
 ├── synaesthesia.py   # Colour profile loader (synaesthesia.json or built-in defaults)
 ├── lights.py         # Animators: IdleSparkle, StartupFlare, MoodTransition,
 │                     #            BootStatus, ErrorIndicator, ApiErrorBlip
-├── pixel.py          # NeoPixel WS2812B driver; channel clamping to [0, 255]
+├── pixel.py          # NeoPixel WS2812B driver; clamping + the LED transfer
+│                     #   function (sRGB → linear duty; WS2812B duty is linear
+│                     #   in the byte, so mid-tones over-brighten without it)
 ├── poller.py         # Poll timing with exponential back-off
 └── miss_log.py       # Rolling 1000-entry miss log on flash (misses.txt)
 ```
@@ -212,26 +216,31 @@ r = sqrt(v'² + e'²)   # mood intensity (0 = neutral, ~0.71 = extreme)
 - **θ** — what you're feeling. This determines the hue.
 
 ### Confidence Scalar
-A per-session scalar multiplied against saturation communicates lookup certainty:
+A per-session scalar multiplied against **Lab chroma** communicates lookup certainty:
 
 | Lookup result | Confidence update |
 |---|---|
 | Track hit | `= 1.0` — vivid; device is certain |
 | Artist hit | `= max(0.6, × 0.95)` — washes toward 0.6 over ~10 polls, then arrests |
-| Full miss | `×= 0.85` — decays from wherever toward 0.0 (near-white) |
+| Full miss | `×= 0.85` — decays from wherever toward 0.0 (mid grey) |
 
-`confidence = 1.0` is the identity; `confidence = 0.0` gives greyscale. Applied via `apply_confidence(rgb, c)` in `color.py`.
+`confidence = 1.0` is the identity; `confidence = 0.0` gives greyscale. Applied via `apply_confidence(rgb, c)` in `color.py`, which scales chroma while **holding lightness**, so an uncertain colour drains toward a mid grey rather than washing out toward white. Every palette entry is kept at S≥0.15 so that no confident colour can be mistaken for the zero-confidence grey.
 
 ### Color Function
-Three independent mappings:
+One table, interpolated in **CIELAB**:
 
 ```
-H = H(θ)                          # hue — a fitted function of mood direction
-S = min(1.0, r * k)               # saturation — grows with mood intensity
-V = V_floor + V_range * energy    # brightness — tracks energy, never reaches zero
+L,a,b = lerp(color_map, θ)                 # colour — piecewise-linear in Lab,
+                                           #   circular wraparound at 0/360
+L    *= 1 + energy_tilt * (2*energy - 1)   # energy tilts lightness, ±15%
+rgb   = lab_to_rgb(L,a,b, master_brightness)   # scaled last, in linear light
 ```
 
-`H(θ)` is a smooth periodic function fitted to eight anchor points derived from real Spotify audio feature data. See §7 for the anchors and §9 (Milestone 0) for how they are calibrated.
+`color_map` is eight `[θ, "#RRGGBB"]` knots, one per zone at that zone's own anchor direction. See §7.
+
+**Mood intensity `r` is deliberately not an input.** Once a zone's colour is stated explicitly it *is* the whole statement of mood direction, and letting `r` pull centrist moods toward neutral is precisely how the earlier `H(θ)`/`S = r·k`/`V = floor + range·e` model collapsed eight zones into about four. Only energy modulates, and only lightness.
+
+`master_brightness` is applied last and in linear light, so scaling all three channels equally preserves chromaticity exactly — it dims the ring without moving any colour relative to its neighbours.
 
 ### Temporal Averaging
 Each pixel represents a different time horizon over the (valence, energy) space:
@@ -252,12 +261,14 @@ v̄ₙ = α * vₙ + (1 - α) * v̄ₙ₋₁
 ### Pixel State Machine
 The system handles sparse early data gracefully. Transitions are gated on **track-bundle hit polls** only (artist-only and miss polls do not advance the counter):
 
-| Track-hit poll count | Pixel 0 | Pixel 1 | Pixel 2 |
+| Elapsed since first track hit | Pixel 0 | Pixel 1 | Pixel 2 |
 |---|---|---|---|
-| 0 (inactive) | candle flicker | candle flicker | candle flicker |
-| 1 – 20 (< ~1 hr) | recent | recent | recent |
-| 21 – 80 (1 – 4 hr) | recent | 1h EWMA | 1h EWMA |
-| > 80 (> ~4 hr) | recent | 1h EWMA | 4h EWMA |
+| no hits yet (inactive) | idle colour | idle colour | idle colour |
+| < 1 hr | recent | recent | recent |
+| 1 – 4 hr | recent | 1h EWMA | 1h EWMA |
+| ≥ 4 hr | recent | 1h EWMA | 4h EWMA |
+
+Gating is on **elapsed wall-clock since the first track hit**, not on a count of track-hit polls. Poll cadence is not constant — exponential back-off and overnight silence both stretch it — so a count would let an hour of listening and a night of nothing advance the same pixel by the same amount. The EWMAs are likewise time-weighted (`ewma.py`, `tau_from_alpha`), decaying by real elapsed milliseconds rather than by poll.
 
 On first Spotify activity after idle, all three pixels flare to life together via `StartupFlare`, then transition to `MoodTransition` once the flare completes.
 
@@ -269,27 +280,40 @@ On first Spotify activity after idle, all three pixels flare to life together vi
 - **Ambient, not attention-seeking.** These lights live at the edge of peripheral vision on a working keyboard. They must never demand attention.
 - **Transitions are slow** — 45–90 seconds to fully cross between states. Changes should be noticed only in retrospect.
 - **No strobing, no beat-sync, no pulsing.** The only motion is a glacial brightness breathing. The only exception is the idle sparkle, which is near-invisible.
-- **Maximum brightness is modest** — approximately 40–50% of NeoPixel ceiling. These are mood indicators, not accent lights.
+- **Maximum brightness is modest.** `master_brightness` ships at **0.65** of NeoPixel ceiling, set on the bench in a dark room. These are mood indicators, not accent lights.
 
 ### Anchor Colors
-These are the eight reference points that constrain the H(θ) function. Positions in (valence, energy) space are estimates, to be refined by Milestone 0 data collection.
+The shipped `color_map`. Each knot sits at its zone's own direction in (V, E) space; θ = `atan2(e−0.5, v−0.5)`.
 
-| Zone | Representative Artists | Est. (V, E) | Color | Hex |
-|---|---|---|---|---|
-| Industrial | Front Line Assembly, Ministry | (0.15, 0.85) | Blood crimson | `#6b0000` |
-| Darkwave | TR/ST, Depeche Mode | (0.25, 0.55) | Ice blue | `#0a1a70` |
-| Shoegaze | My Bloody Valentine, Slowdive | (0.30, 0.60) | Blue jeans | TBD |
-| Zone-out / groovy | Orb, DJ Shadow, Amon Tobin, BOC | (0.40, 0.45) | Phosphor amber | `#6a3800` |
-| Indie melancholy | Yo La Tengo, Cocteau Twins, NewDad | (0.35, 0.50) | Deep violet | `#2d0a50` |
-| Ambient / relaxing | Robert Fripp, Ulrich Schnauss | (0.50, 0.15) | Evening teal | `#003d3d` |
-| Americana / folksy | Fleet Foxes, Josh Ritter, Tom Petty | (0.70, 0.35) | Root beer | `#3d1000` |
-| Fun / dance | LCD Soundsystem, Talking Heads | (0.75, 0.80) | Electric green | `#1a5a10` |
+| Zone | Representative Artists | (V, E) | θ | Colour | Hex |
+|---|---|---|---|---|---|
+| Fun / dance | LCD Soundsystem, Talking Heads | (0.75, 0.80) | 50.2° | Pumpkin | `#E67112` |
+| Industrial | Front Line Assembly, Ministry | (0.15, 0.85) | 135.0° | Red | `#F00001` |
+| Shoegaze | My Bloody Valentine, Slowdive | (0.30, 0.60) | 153.4° | Magenta | `#BA0EAD` |
+| Darkwave | TR/ST, Depeche Mode | (0.25, 0.55) | 168.7° | Cobalt | `#2E04F0` |
+| Indie melancholy | Yo La Tengo, Cocteau Twins, NewDad | (0.35, 0.50) | 180.0° | Pale blue | `#2187D7` |
+| Zone-out / groovy | Orb, DJ Shadow, Amon Tobin, BOC | (0.40, 0.45) | 206.6° | Cyan | `#1CEDB9` |
+| Ambient / relaxing | Robert Fripp, Ulrich Schnauss | (0.50, 0.15) | 270.0° | Mint | `#1DDB56` |
+| Americana / folksy | Fleet Foxes, Josh Ritter, Tom Petty | (0.70, 0.35) | 323.1° | Green-gold | `#8BC700` |
 
-The shoegaze (V, E) estimate and hex are placeholders — to be anchored by M0 data from `gazey_gaze` playlist. The color should read as a warm, faded denim blue: somewhere between ice blue and deep violet, with more warmth than either.
+**Hue runs monotonically around θ, and that is the load-bearing constraint.** When colour order matches zone order around the wheel, a band between two knots is between them in colour too, so it cannot impersonate a third. A table that violates it winds the hue circle more than once per revolution, and every extra winding is a collision.
 
-The phosphor amber zone-out color intentionally sits near the center of the polar space (low r), so it presents as a warm, desaturated glow — appropriate for the mild, focused listening state it represents.
+The price is that zone↔colour pairings fall out of geometry rather than taste. θ order is fixed by each zone's (V, E) and cannot be assigned — fun/dance sits between americana and industrial, so its hue must lie between theirs. Pumpkin, not the violet that was wanted.
 
-The color wheel distribution is intentionally spread: red, blue, mid-blue, amber, violet, teal, root beer, green — no two adjacent anchors compete visually.
+### Separation is measured in duty chromaticity, not ΔE
+ΔE models a reflective patch under D65. A NeoPixel behind diffusion is emissive, and the eye adapts the absolute level away, so **two knots differing mostly in lightness arrive as one colour.** Measured on the bench:
+
+| Pair | Chromaticity | ΔE | Read as |
+|---|---|---|---|
+| industrial / americana *(earlier table)* | **0.064** | 35.7 | one colour |
+| indie-melancholy / ambient *(earlier table)* | 0.182 | 25.9 | two |
+| darkwave / fun-dance | 0.298 | **16.2** | two |
+
+ΔE ranked the first two backwards. Chromaticity is `pixel.to_duty(rgb)` normalised to sum 1 — proportional to emitted light, because WS2812B duty is linear in the byte. Working floor **0.20**, drawn between an observed pass at 0.182 and an observed fail at 0.064; three bench points, not a precisely located threshold. The shipped table's worst pair is 0.251.
+
+This is also why **root beer is not in the palette**, having now been rejected twice. Emitted, `#502702` is duty `12, 3, 0` against fun/dance's `152, 35, 3` — the same chromaticity at lower output, 0.097 away. It is the pumpkin with the lights down. The same geometry made `#502702` unusable for zone-out in the first palette: mud and pastel are one colour at different V.
+
+Earlier drafts of this table are recorded in issue #9. The first shipped palette — blood crimson, ice blue, phosphor amber, root beer — sat almost entirely below V 0.55 and rendered as about four distinguishable colours on hardware.
 
 ---
 
@@ -319,7 +343,7 @@ Four-stage whisky pipeline. Workflow:
 2. `src/musical-mash-bill/` — three-phase enrichment: Phase 1 MusicBrainz (artist+title fuzzy match → MBID), Phase 2 AcousticBrainz (MBID → mood/BPM features), Phase 3 Last.fm (track.getTopTags for tracks with no AB coverage). Output written back to `data/musical-gestalt/` in-place.
 3. `src/musical-distiller/` — derives (valence, energy) from enriched features via `mapping.toml` using priority order: AB features → Last.fm tag-zone vote → explicit zone anchor. Output to `data/musical-affective-memory/` (one JSON per source playlist).
 4. `src/musical-bottler/` — compiles affective-memory JSONs into a versioned binary bundle (`data/musical-memory-bundle/memory-bundle-v{N}-{YYYYMMDD_HHMMSS}.bin`) in MMAR format for ESP32 binary search.
-5. Notebook analysis — plot training tracks in (valence, energy) space, verify anchor positions, fit H(θ) to the anchor color set.
+5. Notebook analysis — plot training tracks in (valence, energy) space, verify anchor positions, and sweep θ for bands that impersonate a zone they do not sit between (both the ΔE and chromaticity rules).
 6. Notebook validation — apply the fitted function to a held-out test set. Verify colors feel musically correct.
 
 Training set: ~680 labeled tracks across 8 zones. Test set: `something_new` (~313 tracks, multi-zone, no zone label — used for step 6 validation only).
@@ -339,7 +363,7 @@ OAuth flow via config server, auth code exchange, refresh token storage, access 
 Recently-played fetch, 3-minute poll loop, MMAR bundle lookup for each track ID, error handling and backoff.
 
 ### Milestone 5 — Mood Engine
-Polar transform, H(θ) implementation (using fitted function from M0), saturation and brightness mappings, EWMA accumulators for 1h and 4h windows, pixel state machine. (valence, energy) values sourced from on-flash MMAR bundle, not from Spotify API.
+Polar transform, CIELAB interpolation over the M0 `color_map`, energy tilt and master brightness, EWMA accumulators for 1h and 4h windows, pixel state machine. (valence, energy) values sourced from on-flash MMAR bundle, not from Spotify API.
 
 ### Milestone 6 — Animations
 Startup flare, idle sparkle, slow mood transitions, NeoPixel status indicators for error states.

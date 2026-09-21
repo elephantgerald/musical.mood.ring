@@ -74,7 +74,7 @@ class MoodEngine:
         self._hit_poll_count = 0      # polls with ≥1 track-bundle hit (diagnostic only)
         self._first_hit_ms   = None   # wall-clock of first track hit — tier gate origin
         self._last_ewma_ms   = None   # wall-clock of last EWMA feed — for dt weighting
-        self._confidence     = 1.0   # saturation scalar; decays on artist/miss polls
+        self._confidence     = 1.0   # Lab chroma scalar; decays on artist/miss polls
         self._last_outcomes  = []     # per-track outcomes from most recent update()
 
     def update(self, track_pairs, now_ms=None):

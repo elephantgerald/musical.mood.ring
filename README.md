@@ -26,7 +26,9 @@ When Spotify has been quiet, all three flicker like a distant candle — an orga
 
 ### Personalised color mapping
 
-The angle-to-hue mapping (`H(θ)`) is personal. Everyone's color intuition is slightly different — the hue that reads as "brooding" to one person may read as "serene" to another. The project stores this as a small JSON **synaesthesia profile** that gets flashed to the device alongside the mood bundle. A calibration notebook lets each person tune (or accept) the default mapping and export their own profile. The device works out of the box with the built-in defaults; the profile is an optional personalisation layer.
+Which colour a mood reads as is personal — the hue that says "brooding" to one person says "serene" to another. The project stores the mapping as a small JSON **synaesthesia profile**, flashed to the device alongside the mood bundle: eight `[angle, colour]` knots that the firmware interpolates between in CIELAB, plus an energy tilt and a master brightness. A calibration notebook lets each person tune (or accept) the defaults and export their own profile. The device works out of the box with the built-ins; the profile is an optional personalisation layer.
+
+The colours are not free to choose one at a time, though. The knots must run monotonically around the colour wheel in the same order the moods do, or the blends between them start impersonating moods they sit nowhere near. Personalising the palette means turning the whole wheel, not repainting one spoke.
 
 ### A note on Spotify's API
 
