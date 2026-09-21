@@ -13,7 +13,8 @@ Needs the firmware modules and synaesthesia.json on flash:
 Six stages, announced on serial as they run. Ctrl-C to stop.
 
   1. knot walk        each colour in the table, alone, in theta order
-  2. tightest pairs   the two the maths says are closest, side by side
+  2. tightest pairs   the two closest in DUTY CHROMATICITY, side by side
+                      (not Lab dE — dE ranked the bench results backwards)
   3. confidence       a track-hit colour decaying to a zero-confidence grey
   4. gamma A/B        the LED transfer function on, then off  <-- the big one
   5. brightness       master_brightness 0.40 / 0.65 / 1.00
@@ -30,7 +31,6 @@ import synaesthesia
 _HOLD  = 4.0     # seconds per colour in the walk stages
 _LABEL = {
     50.2:  "fun/dance",
-    95.0:  "(steering knot)",
     135.0: "industrial",
     153.4: "shoegaze",
     168.7: "darkwave",
@@ -76,10 +76,10 @@ def knot_walk():
 def tightest_pairs():
     _banner(2, "tightest pairs", "Can you tell them apart? Pixel 2 is dark.")
     pairs = (
-        ((180.0, "indie-melancholy"), (270.0, "ambient"),
-         "dE 36 — the tightest in the palette"),
-        ((135.0, "industrial"), (323.1, "americana"),
-         "dE 38 — mostly chroma, not lightness"),
+        ((50.2, "fun/dance"), (135.0, "industrial"),
+         "chromaticity 0.251 — the tightest in the palette"),
+        ((153.4, "shoegaze"), (168.7, "darkwave"),
+         "0.30 — only 15 degrees apart in theta, so the colour moves fast"),
     )
     for (t0, n0), (t1, n1), note in pairs:
         a = color.mood_to_rgb(*_ve(t0))
@@ -133,8 +133,8 @@ def brightness_ladder():
 
 def theta_sweep(seconds=60.0, step=2.0):
     _banner(6, "theta sweep", "Does any band read as a zone it sits between?")
-    print("    Watch for magenta between violet and red (the collision the")
-    print("    steering knot fixes), and for the ochre band at theta ~115.")
+    print("    Hue runs monotonically around theta, so every band should sit")
+    print("    between its two neighbours in colour as well as in angle.")
     n = int(360.0 / step)
     delay = seconds / n
     for i in range(n):

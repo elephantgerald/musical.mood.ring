@@ -34,15 +34,23 @@ _PATH = "synaesthesia.json"
 # color.py interpolates between adjacent pairs in CIELAB, with circular
 # wraparound between the last and first entries.
 #
-# Eight of the nine knots are the calibrated palette (issue #9): one colour
-# per zone, chosen for a minimum pairwise Lab dE of 35.6, every zone at
-# V>=0.55 and S>=0.15 so that none of them lands in the brown/mud band or
-# collides with the near-grey the ring shows at zero confidence.
+# One knot per zone, each parked at that zone's own anchor direction, and
+# hue runs monotonically around theta (issue #9). The monotonicity is the
+# load-bearing part: if the colour order around the wheel matches the zone
+# order around the wheel, a band between two knots is always between them in
+# colour too, so it cannot impersonate a third. Under a non-monotonic table
+# the colour path winds the hue circle several times per revolution and every
+# extra winding is a collision -- an earlier draft put 18% of the wheel
+# within chromaticity 0.006 of a zone it was not.
 #
-# The ninth, at 95 degrees, belongs to no zone. It steers the interpolation:
-# theta 75-120 is the densest region of the listening corpus and the widest
-# gap in the table, and run straight from fun/dance to industrial it passed
-# within dE 6 of shoegaze -- 15% of the library reading as a zone it was not.
+# Separation is measured as DUTY CHROMATICITY, not Lab dE. A NeoPixel behind
+# diffusion is judged on chromaticity; the eye adapts the absolute level away,
+# so two knots differing only in lightness arrive as one colour. Bench-tested
+# on hardware: a pair at 0.064 read as one colour, a pair at 0.182 read as
+# two. This table's worst pair is 0.251. dE ranked those two pairs backwards.
+#
+# Every zone stays at V>=0.55 and S>=0.15 so none lands in the brown/mud band
+# or collides with the near-grey the ring shows at zero confidence.
 
 _DEFAULT = {
     "version": 2,
@@ -66,15 +74,14 @@ _DEFAULT = {
     # theta: mood direction in degrees (atan2(energy-0.5, valence-0.5) % 360)
     # hex:   the colour that direction should read as, as sRGB
     "color_map": [
-        [ 50.2, "#BA01FF"],   # fun/dance         violet
-        [ 95.0, "#3FD34A"],   # (steering knot)   grass green
-        [135.0, "#FC284F"],   # industrial        vivid rose-red
-        [153.4, "#FF00AA"],   # shoegaze          hot magenta
-        [168.7, "#0E4EAD"],   # darkwave          cobalt
-        [180.0, "#70AFC4"],   # indie-melancholy  pale blue
-        [206.6, "#D8900B"],   # zone-out          ginger ale
-        [270.0, "#AFF2D4"],   # ambient           mint
-        [323.1, "#A03738"],   # americana         brick red
+        [ 50.2, "#E67112"],   # fun/dance         pumpkin
+        [135.0, "#F00001"],   # industrial        red
+        [153.4, "#BA0EAD"],   # shoegaze          magenta
+        [168.7, "#2E04F0"],   # darkwave          cobalt
+        [180.0, "#2187D7"],   # indie-melancholy  pale blue
+        [206.6, "#1CEDB9"],   # zone-out          cyan
+        [270.0, "#1DDB56"],   # ambient           mint
+        [323.1, "#8BC700"],   # americana         green-gold
     ],
 
     # Energy tilts the anchor's Lab lightness by +/- this fraction:

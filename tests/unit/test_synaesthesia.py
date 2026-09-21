@@ -24,8 +24,10 @@ def test_color_map_entries_are_hex():
 def test_color_map_covers_every_zone():
     """Every zone anchor's direction must have a knot within a degree of it.
 
-    Knots may exist that are not zones (the steering knot at 95 degrees), but
-    no zone may be left without its own colour.
+    The table is one knot per zone, each parked at that zone's own anchor
+    direction. An earlier draft carried a ninth knot belonging to no zone, to
+    steer the interpolation across a gap; making hue monotonic in theta
+    removed the need for it.
     """
     import math
     thetas = [t for t, _ in synaesthesia.color_map()]
