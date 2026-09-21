@@ -2,38 +2,48 @@ import pytest
 import synaesthesia
 
 
-def test_hue_at_each_knot():
-    """hue() must return exactly the defined H at every anchor θ."""
-    for theta, expected_h in synaesthesia._p["hue_map"]:
-        got  = synaesthesia.hue(theta)
-        diff = abs((got - expected_h + 180) % 360 - 180)
-        assert diff < 0.5, f"theta={theta}: expected H={expected_h:.1f}, got H={got:.1f}"
+def test_color_map_sorted_ascending():
+    """color.py's segment walk assumes the knots are in theta order."""
+    thetas = [t for t, _ in synaesthesia.color_map()]
+    assert thetas == sorted(thetas)
+    assert len(thetas) == len(set(thetas)), "duplicate theta would give a zero-width segment"
 
 
-def test_hue_in_range():
-    """hue() output must be in [0, 360) for any theta."""
-    for deg in range(0, 360, 3):
-        h = synaesthesia.hue(deg)
-        assert 0.0 <= h < 360.0, f"hue({deg}) = {h} out of range"
+def test_color_map_thetas_in_range():
+    for theta, _ in synaesthesia.color_map():
+        assert 0.0 <= theta < 360.0
 
 
-def test_hue_wraparound():
-    """hue(0) and hue(360) must be identical."""
-    assert synaesthesia.hue(0.0) == pytest.approx(synaesthesia.hue(360.0), abs=0.01)
+def test_color_map_entries_are_hex():
+    for theta, hexcode in synaesthesia.color_map():
+        assert hexcode.startswith("#") and len(hexcode) == 7, \
+            "theta={}: {!r} is not #RRGGBB".format(theta, hexcode)
+        int(hexcode[1:], 16)
 
 
-def test_saturation_k_positive():
-    assert synaesthesia.saturation_k() > 0
+def test_color_map_covers_every_zone():
+    """Every zone anchor's direction must have a knot within a degree of it.
+
+    The table is one knot per zone, each parked at that zone's own anchor
+    direction. An earlier draft carried a ninth knot belonging to no zone, to
+    steer the interpolation across a gap; making hue monotonic in theta
+    removed the need for it.
+    """
+    import math
+    thetas = [t for t, _ in synaesthesia.color_map()]
+    for zone, (v, e) in synaesthesia.zone_anchors().items():
+        theta = math.degrees(math.atan2(e - 0.5, v - 0.5)) % 360
+        assert any(abs(theta - t) < 1.0 for t in thetas), \
+            "{} at theta {:.1f} has no knot".format(zone, theta)
 
 
-def test_brightness_ceiling():
-    """floor + range must not exceed 50% (NeoPixel brightness budget)."""
-    ceiling = synaesthesia.brightness_floor() + synaesthesia.brightness_range()
-    assert ceiling <= 0.51   # small float slack
+def test_energy_tilt_in_range():
+    """A tilt above ~0.5 would let energy restate the colour rather than shade it."""
+    assert 0.0 <= synaesthesia.energy_tilt() <= 0.5
 
 
-def test_brightness_floor_nonnegative():
-    assert synaesthesia.brightness_floor() >= 0.0
+def test_master_brightness_in_range():
+    assert 0.0 < synaesthesia.master_brightness() <= 1.0
 
 
 def test_ewma_alphas_ordered():
@@ -51,3 +61,45 @@ def test_zone_anchors_in_range():
 
 def test_profile_name_is_string():
     assert isinstance(synaesthesia.profile_name(), str)
+
+
+# ── Fallback behaviour ─────────────────────────────────────────────────────
+
+def test_missing_field_falls_back_to_default():
+    """A stale v1 profile on flash must degrade, not raise.
+
+    v1 profiles carry hue_map/saturation_k and no color_map at all. The device
+    should come up on the built-in palette rather than failing to boot.
+    """
+    saved = synaesthesia._p
+    synaesthesia._p = {"version": 1, "name": "stale", "hue_map": [[0.0, 0.0]],
+                       "saturation_k": 2.0}
+    try:
+        assert synaesthesia.color_map() == synaesthesia._DEFAULT["color_map"]
+        assert synaesthesia.energy_tilt() == synaesthesia._DEFAULT["energy_tilt"]
+        assert synaesthesia.master_brightness() == synaesthesia._DEFAULT["master_brightness"]
+        assert synaesthesia.zone_anchors() == synaesthesia._DEFAULT["zone_anchors"]
+        assert synaesthesia.profile_name() == "stale"
+    finally:
+        synaesthesia._p = saved
+
+
+def test_partial_profile_keeps_its_own_fields():
+    """Fallback is per key: a profile contributes whatever it does carry."""
+    saved = synaesthesia._p
+    synaesthesia._p = {"name": "partial", "master_brightness": 0.2}
+    try:
+        assert synaesthesia.master_brightness() == 0.2
+        assert synaesthesia.color_map() == synaesthesia._DEFAULT["color_map"]
+    finally:
+        synaesthesia._p = saved
+
+
+def test_default_profile_is_self_consistent():
+    """The built-in default must satisfy every rule a loaded profile does."""
+    d = synaesthesia._DEFAULT
+    thetas = [t for t, _ in d["color_map"]]
+    assert thetas == sorted(thetas)
+    assert 0.0 <= d["energy_tilt"] <= 0.5
+    assert 0.0 < d["master_brightness"] <= 1.0
+    assert 0 < d["ewma_alpha_4h"] < d["ewma_alpha_1h"] < 1

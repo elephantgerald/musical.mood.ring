@@ -10,12 +10,16 @@
 # flashed to the device alongside the MMAR track bundle. Each person can
 # have their own; the mapping from mood direction to colour is personal.
 #
+# This module is a pure profile accessor: it holds no colour maths. The
+# interpolation over color_map lives in color.py, which is where the Lab
+# conversions are. Field lookups fall back to _DEFAULT key by key, so a
+# stale v1 profile left on flash degrades to the built-in palette rather
+# than raising.
+#
 # Usage:
 #   import synaesthesia
-#   h = synaesthesia.hue(theta_deg)
-#   k = synaesthesia.saturation_k()
-
-import math
+#   anchors = synaesthesia.color_map()
+#   b       = synaesthesia.master_brightness()
 
 try:
     import ujson as json          # MicroPython
@@ -26,16 +30,41 @@ _PATH = "synaesthesia.json"
 
 # ── Built-in default profile ───────────────────────────────────────────────
 #
-# hue_map: list of [theta_deg, hue_deg] pairs, sorted ascending by theta.
-# The firmware does piecewise-linear interpolation between pairs, with
-# circular wraparound between the last and first entries.
+# color_map: list of [theta_deg, "#RRGGBB"] pairs, sorted ascending by theta.
+# color.py interpolates between adjacent pairs in CIELAB, with circular
+# wraparound between the last and first entries.
 #
-# Values below are derived from the design anchor positions in DESIGN.md §7.
-# They are reasonable placeholders. Replace by flashing a synaesthesia.json
-# produced by the M0 calibration notebook after H(θ) is fitted in issue #6.
+# One knot per zone, each parked at that zone's own anchor direction, and
+# hue runs monotonically around theta (issue #9). The monotonicity is the
+# load-bearing part: if the colour order around the wheel matches the zone
+# order around the wheel, a band between two knots is always between them in
+# colour too, so it cannot impersonate a third. Under a non-monotonic table
+# the colour path winds the hue circle several times per revolution and every
+# extra winding is a collision -- an earlier draft put 18% of the wheel
+# within chromaticity 0.006 of a zone it was not.
+#
+# Separation is measured as DUTY CHROMATICITY, not Lab dE. A NeoPixel behind
+# diffusion is judged on chromaticity; the eye adapts the absolute level away,
+# so two knots differing only in lightness arrive as one colour. Bench-tested
+# on hardware: a pair at 0.064 read as one colour, a pair at 0.182 read as
+# two. This table's worst pair is 0.251. dE ranked those two pairs backwards.
+#
+# Two caveats the bench added, both about SIMULTANEOUS adjacency -- which is
+# the operating condition, since all three pixels are lit at once:
+#   - Sequential and side-by-side are different tests. A pair can pass a walk
+#     and fail when two pixels show it at the same time.
+#   - Blues need more margin than warm colours. darkwave/indie-melancholy read
+#     as near-identical at 0.361 while fun/dance/industrial passed easily at
+#     0.251. Fixed by DESATURATING indie-melancholy (0.361 -> 0.548), which
+#     moves chromaticity toward neutral without touching hue order. The floor
+#     on that move is the zero-confidence grey: it must stay >0.25 away, or a
+#     confident colour starts reading as a miss.
+#
+# Every zone stays at V>=0.55 and S>=0.15 so none lands in the brown/mud band
+# or collides with the near-grey the ring shows at zero confidence.
 
 _DEFAULT = {
-    "version": 1,
+    "version": 2,
     "name": "default",
 
     # Zone anchor positions in (valence, energy) space.
@@ -52,28 +81,31 @@ _DEFAULT = {
         "fun/dance":        [0.75, 0.80],
     },
 
-    # Angle → hue anchor table. Firmware interpolates between these points.
+    # Angle → colour anchor table, sorted by theta.
     # theta: mood direction in degrees (atan2(energy-0.5, valence-0.5) % 360)
-    # hue:   target HSV hue in degrees (0=red, 120=green, 240=blue)
-    "hue_map": [
-        [ 50.2, 112.0],   # fun/dance      → electric green
-        [135.0,   0.0],   # industrial     → blood crimson
-        [153.4, 210.0],   # shoegaze       → blue jeans  (placeholder)
-        [168.7, 231.0],   # darkwave       → ice blue
-        [180.0, 270.0],   # indie-melancholy → deep violet
-        [206.6,  32.0],   # zone-out       → phosphor amber
-        [270.0, 180.0],   # ambient        → evening teal
-        [323.1,  16.0],   # americana      → root beer
+    # hex:   the colour that direction should read as, as sRGB
+    "color_map": [
+        [ 50.2, "#E67112"],   # fun/dance         pumpkin
+        [135.0, "#F00001"],   # industrial        red
+        [153.4, "#BA0EAD"],   # shoegaze          magenta
+        [168.7, "#2E04F0"],   # darkwave          cobalt
+        [180.0, "#7EC2F2"],   # indie-melancholy  drained pale blue
+        [206.6, "#1CEDB9"],   # zone-out          cyan
+        [270.0, "#1DDB56"],   # ambient           mint
+        [323.1, "#8BC700"],   # americana         green-gold
     ],
 
-    # Saturation: S = min(1.0, r * saturation_k)
-    # r is the polar distance from mood-space centre (0 = neutral, ~0.71 = extreme)
-    "saturation_k": 2.0,
+    # Energy tilts the anchor's Lab lightness by +/- this fraction:
+    # L *= (1 - tilt) at energy 0, L *= (1 + tilt) at energy 1.
+    # Keeps "loud is brighter" without letting energy restate the colour.
+    # Mood intensity r does NOT modulate the output — the anchor colour is
+    # the whole statement of direction (issue #9).
+    "energy_tilt": 0.15,
 
-    # Brightness: V = brightness_floor + brightness_range * energy
-    # Ceiling = floor + range ≈ 0.50 (50% of NeoPixel ceiling, per design spec)
-    "brightness_floor": 0.15,
-    "brightness_range": 0.35,
+    # Fraction of full LED output, applied last, in linear light.
+    # Scaling all three channels equally preserves chromaticity exactly, so
+    # this dims the ring without disturbing the palette's separation.
+    "master_brightness": 0.65,
 
     # EWMA decay factors for the 1-hour and 4-hour pixel windows.
     # Derived from: alpha = 1 - 0.5 ^ (1 / half_life_in_polls)
@@ -96,58 +128,43 @@ def _load():
 _p = _load()
 
 
+def _get(key):
+    """Read a profile field, falling back to the built-in default.
+
+    Per-key rather than per-profile so that a profile written against an
+    older schema still contributes the fields it does carry.
+    """
+    try:
+        return _p[key]
+    except KeyError:
+        return _DEFAULT[key]
+
+
 # ── Public interface ───────────────────────────────────────────────────────
 
-def hue(theta_deg):
-    """Map a mood direction angle to a hue (both in degrees, 0–360).
-
-    Uses piecewise linear interpolation over the hue_map anchor table,
-    with circular wraparound between the last and first entries.
-    Interpolation takes the shortest angular path for hue transitions.
-    """
-    hm = _p["hue_map"]
-    n  = len(hm)
-    t  = theta_deg % 360
-
-    for i in range(n):
-        t0, h0 = hm[i]
-        t1, h1 = hm[(i + 1) % n]
-        if i == n - 1:
-            # Wraparound segment: last entry → first entry through 360°/0°
-            t1 += 360
-            if t < t0:
-                t += 360
-        if t0 <= t < t1:
-            frac = (t - t0) / (t1 - t0)
-            dh = (h1 - h0 + 180) % 360 - 180   # shortest angular distance
-            return (h0 + frac * dh) % 360
-
-    return hm[0][1]   # unreachable with a well-formed hue_map, but safe
+def color_map():
+    """List of [theta_deg, "#RRGGBB"] anchors, sorted ascending by theta."""
+    return _get("color_map")
 
 
-def saturation_k():
-    """Scale factor for saturation: S = min(1.0, r * k)."""
-    return _p["saturation_k"]
+def energy_tilt():
+    """Fractional Lab-lightness swing applied across energy 0 → 1."""
+    return _get("energy_tilt")
 
 
-def brightness_floor():
-    """Minimum brightness (0–1). LEDs never go fully dark."""
-    return _p["brightness_floor"]
-
-
-def brightness_range():
-    """Brightness range above the floor. Maximum = floor + range."""
-    return _p["brightness_range"]
+def master_brightness():
+    """Fraction of full LED output (0–1), applied last in linear light."""
+    return _get("master_brightness")
 
 
 def ewma_alpha(window):
     """EWMA decay factor for '1h' or '4h' pixel time window."""
-    return _p["ewma_alpha_1h"] if window == "1h" else _p["ewma_alpha_4h"]
+    return _get("ewma_alpha_1h") if window == "1h" else _get("ewma_alpha_4h")
 
 
 def zone_anchors():
     """Dict of zone name → [valence, energy] anchor positions."""
-    return _p["zone_anchors"]
+    return _get("zone_anchors")
 
 
 def profile_name():

@@ -1,11 +1,22 @@
 import json
+import math
 
 import pytest
+import color
 import miss_log
 from conftest import build_bundle
 from clock       import FakeClock
 from mmar        import MMARBundle
 from mood_engine import MoodEngine, _MS_1H, _MS_4H
+
+
+def _lab(rgb):
+    return color._rgb_to_lab(rgb)
+
+
+def _chroma(rgb):
+    _, a, b = _lab(rgb)
+    return math.hypot(a, b)
 
 # Tests express durations as poll counts at the nominal 3-min cadence; the engine
 # gates on wall-clock time, which a FakeClock advances deterministically. These
@@ -152,14 +163,15 @@ def test_pixels_diverge_after_4h():
 
 def test_now_pixel_persists_across_miss_poll():
     """
-    After a miss poll, pixel 0 still reflects the last known track (same hue
-    and brightness). Saturation may be lower due to confidence decay — that is
-    intentional — but max(channel) (brightness) must be preserved.
+    After a miss poll, pixel 0 still reflects the last known track. Chroma may
+    be lower due to confidence decay — that is intentional — but the colour's
+    Lab lightness must be preserved, so the pixel washes out without dimming.
     """
     engine = _engine(("t1", 0.9, 0.1))
     colors_hit  = _poll(engine, _p("t1"))
     colors_miss = _poll(engine, _p("nomatch"))
-    assert max(colors_hit[0]) == max(colors_miss[0])
+    assert abs(_lab(colors_hit[0])[0] - _lab(colors_miss[0])[0]) < 1.5
+    assert _chroma(colors_miss[0]) < _chroma(colors_hit[0])
 
 
 def test_miss_poll_does_not_advance_state():

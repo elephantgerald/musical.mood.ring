@@ -74,7 +74,7 @@ class MoodEngine:
         self._hit_poll_count = 0      # polls with ≥1 track-bundle hit (diagnostic only)
         self._first_hit_ms   = None   # wall-clock of first track hit — tier gate origin
         self._last_ewma_ms   = None   # wall-clock of last EWMA feed — for dt weighting
-        self._confidence     = 1.0   # saturation scalar; decays on artist/miss polls
+        self._confidence     = 1.0   # Lab chroma scalar; decays on artist/miss polls
         self._last_outcomes  = []     # per-track outcomes from most recent update()
 
     def update(self, track_pairs, now_ms=None):
@@ -173,10 +173,10 @@ class MoodEngine:
         sources = self._tier_sources(now_ms)
         if sources[0] is None:
             # Inactive — no track-bundle hits yet. Synthetic idle colour (not
-            # sourced from an observed (v, e); see _tier_sources()).
-            idle = mood_to_rgb(0.5, synaesthesia.brightness_floor() /
-                               (synaesthesia.brightness_floor() + synaesthesia.brightness_range()))
-            idle = apply_confidence(idle, self._confidence)
+            # sourced from an observed (v, e); see _tier_sources()). Neutral
+            # valence at zero energy is θ=270° — the ambient anchor, at the
+            # dimmest end of the energy tilt.
+            idle = apply_confidence(mood_to_rgb(0.5, 0.0), self._confidence)
             return (idle, idle, idle)
         return tuple(apply_confidence(mood_to_rgb(v, e), self._confidence)
                      for v, e in sources)
