@@ -78,8 +78,8 @@ def tightest_pairs():
     pairs = (
         ((50.2, "fun/dance"), (135.0, "industrial"),
          "chromaticity 0.251 — the tightest in the palette"),
-        ((153.4, "shoegaze"), (168.7, "darkwave"),
-         "0.30 — only 15 degrees apart in theta, so the colour moves fast"),
+        ((168.7, "darkwave"), (180.0, "indie-melancholy"),
+         "0.361 — second tightest, and only 11.3 deg apart in theta"),
     )
     for (t0, n0), (t1, n1), note in pairs:
         a = color.mood_to_rgb(*_ve(t0))
