@@ -49,6 +49,23 @@ MB_HEADERS = {
     "User-Agent": "musical-mood-ring/0.1 (https://github.com/elephantgerald/musical.mood.ring)",
     "Accept": "application/json",
 }
+# AcousticBrainz reports each classifier as {value, probability, all}. The
+# `probability` field is the confidence in whichever label WON, not the
+# probability of the mood we are naming: reading it throws the direction away
+# and returns a number near 1.0 for nearly every track, so all eight zones
+# collapse onto one point (issue #70). The signal we want is the positive
+# label's own entry in `all` — note danceability's is `danceable`.
+AB_POSITIVE_LABEL = {
+    "mood_happy":      "happy",
+    "mood_sad":        "sad",
+    "mood_aggressive": "aggressive",
+    "mood_relaxed":    "relaxed",
+    "mood_acoustic":   "acoustic",
+    "mood_party":      "party",
+    "mood_electronic": "electronic",
+    "danceability":    "danceable",
+}
+
 MB_DELAY  = 1.1   # MusicBrainz enforces 1 req/sec; stay just over
 AB_DELAY  = 0.5
 LFM_DELAY = 0.25  # Last.fm allows 5 req/sec
@@ -103,19 +120,10 @@ def ab_fetch_hl(mbid: str) -> dict | None:
     hl = r.json().get("highlevel", {})
 
     def prob(key: str) -> float | None:
-        val = hl.get(key, {}).get("probability")
+        val = hl.get(key, {}).get("all", {}).get(AB_POSITIVE_LABEL[key])
         return round(float(val), 4) if val is not None else None
 
-    return {
-        "mood_happy":      prob("mood_happy"),
-        "mood_sad":        prob("mood_sad"),
-        "mood_aggressive": prob("mood_aggressive"),
-        "mood_relaxed":    prob("mood_relaxed"),
-        "mood_acoustic":   prob("mood_acoustic"),
-        "mood_party":      prob("mood_party"),
-        "mood_electronic": prob("mood_electronic"),
-        "danceability":    prob("danceability"),
-    }
+    return {key: prob(key) for key in AB_POSITIVE_LABEL}
 
 
 def ab_fetch_ll(mbid: str) -> dict:
