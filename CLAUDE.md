@@ -86,6 +86,24 @@ python src/musical-cultivator/scripts/import_misses.py [--host musical-mood-ring
 pytest tests/unit/
 ```
 
+**Offline board harness** (run the real engine in CPython — no ESP32, no Spotify):
+
+This is the primary way to watch the mood engine work. `dev/fake_board.py` drives
+the actual `main.run_poll_cycle()` against the mock Spotify server with a
+`FakeClock`, so simulated hours pass in seconds and the 1h/4h pixel tiers are
+reachable in a handful of polls. Prefer this over flashing a board — a device
+round-trip costs a `reset.sh` that wipes WiFi credentials.
+
+```bash
+dev/start.sh                       # start musical-radio-station (mock Spotify) on :5000
+python dev/fake_board.py --visual --sim-interval 4000   # 3-bar NOW/1h/4h colour panel
+python dev/fake_board.py                                # verbose per-poll log
+dev/stop.sh                        # stop the mock
+```
+Useful flags: `--polls N` (stop after N), `--interval S` (wall-clock seconds
+between polls), `--sim-interval S` (simulated seconds each poll advances),
+`--advance` (step the mock's playback between polls), `--mock HOST:PORT`.
+
 **Flash MicroPython to the ESP32** (WSL2):
 ```bash
 ./build/reset.sh --chip esp32c3   # Seeed XIAO ESP32-C3 (/dev/ttyACM0)
@@ -115,10 +133,11 @@ jupyter notebook src/mood-model/m0_calibration.ipynb
 **Pure logic — CPython-compatible, fully unit-tested:**
 - `mmar.py` — MMAR binary search; `fnv1a_64` hash; `MMARBundle.lookup(track_id)`
 - `polar.py` — `to_polar(v, e)` → `(r, theta_deg)`
-- `ewma.py` — `EWMA(alpha)` accumulator with snap-on-first-update and `reset()`
+- `ewma.py` — time-weighted `EWMA(tau_ms)` accumulator; `update(v, e, dt_ms)` decays by `alpha = 1 - exp(-dt_ms/tau_ms)`, snap-on-first-update, `reset()`. `tau_from_alpha(alpha, ref_ms)` converts a profile alpha (calibrated for the nominal 3-min poll) to a time constant, so cadence irregularity (back-off, silence) no longer distorts the average
+- `clock.py` — pluggable monotonic ms clock. `Clock` (production) folds raw `utime.ticks_ms` deltas through `ticks_diff` into a non-wrapping counter; `FakeClock(start_ms).advance(ms)/set(ms)` makes time deterministic in tests and `dev/fake_board.py`. The one place the firmware reads wall-clock time
 - `color.py` — `mood_to_rgb(v, e)` → `(r, g, b)` via synaesthesia profile; `apply_confidence(rgb, c)` scales saturation
-- `mood_engine.py` — `MoodEngine(bundle, artist_bundle).update(track_pairs)` → 3 RGB tuples; two-tier lookup (track → artist fallback); confidence scalar applied to saturation; now-pixel persistence across miss polls; `snapshot()` / `last_poll_outcomes()` / `OUTCOME_FIELDS` expose internal state for HTTP introspection
-- `runtime_state.py` — `RuntimeState` shared object passed from `main.py` (writer) to `ConfigServer` (reader) so introspection endpoints (#58) can read engine + last-poll metadata without circular imports; `snapshot()` returns a JSON-serializable view; also holds the rolling 20-entry poll log (#57) — `record_poll()` appends one capped, JSON-able record per poll and `poll_log_snapshot()` returns a deep copy for `/poll-log`
+- `mood_engine.py` — `MoodEngine(bundle, artist_bundle, clock).update(track_pairs, now_ms)` → 3 RGB tuples; two-tier lookup (track → artist fallback); confidence scalar applied to saturation; now-pixel persistence across miss polls. **Pixel tiers gate on elapsed wall-clock since the first track hit (1h/4h), not poll count** — and the EWMA takes one time-weighted observation per poll (mean of that poll's hits). `snapshot()` / `last_poll_outcomes()` / `OUTCOME_FIELDS` / `pixel_sources()` (per-pixel `(v,e)`, from the shared tier ladder) expose internal state to `dev/fake_board.py`
+- `runtime_state.py` — `RuntimeState` carries the last-poll view (colours, track IDs, per-track outcomes) plus the rolling 20-entry poll log (#57). `main.py` owns one; `dev/fake_board.py` builds one to drive the same `run_poll_cycle()` off-board. `snapshot()` returns a JSON-serializable view and `poll_log_snapshot()` a deep copy of the buffer. Imports `OUTCOME_FIELDS` from `mood_engine` one-way, so the engine's hot path stays free of any reporting concern
 - `miss_log.py` — rolling 1000-entry miss log on flash (`misses.txt`); `append(track_id)`, `all()`, `clear()`
 - `poller.py` — poll timing with exponential back-off; `should_poll()`, `on_success()`, `on_error()`
 - `synaesthesia.py` — colour profile loader (see below)
@@ -130,9 +149,9 @@ jupyter notebook src/mood-model/m0_calibration.ipynb
 - `mdns.py` — `start(hostname)` / `stop()` (mDNS advertisement)
 - `spotify.py` — `auth_url()`, `exchange_code()`, `recently_played()` → `[(track_id, artist_id)]`, `refresh_token()`. `SPOTIFY_MOCK_HOST` swaps in a plain-HTTP mock but is honoured **only for loopback/RFC1918 targets** (`_mock_host_ok`) and only from flashed `config.json` — never settable over HTTP — so a public host can't downgrade OAuth traffic to cleartext
 - `config.py` — reads/writes `config.json`; `save(data)` merges, `reload()` refreshes constants
-- `config_server.py` — non-blocking HTTP server with a `mode` arg: `mode="setup"` routes all WiFi/Spotify config endpoints; `mode="runtime"` routes only the read-only allowlist (`_RUNTIME_ENDPOINTS` — `GET /misses`, plus #58's introspection GETs) and returns **403** for every mutating endpoint. `lock_runtime()` is the one-way setup→runtime flip. This is the security boundary that stops the always-on server exposing credential writes to any LAN host. Accepts a `state=RuntimeState` kwarg for #58. Spotify handlers never set `done` — the boot setup window (below) governs the setup→runtime transition
+- `config_server.py` — non-blocking HTTP server with a `mode` arg: `mode="setup"` routes all WiFi/Spotify config endpoints; `mode="runtime"` routes only the read-only allowlist (`_RUNTIME_ENDPOINTS` — `GET /misses` alone) and returns **403** for every mutating endpoint. `lock_runtime()` is the one-way setup→runtime flip. This is the security boundary that stops the always-on server exposing credential writes to any LAN host. **Engine introspection is deliberately not served here** — `dev/fake_board.py` runs the real poll loop in CPython, which is where mood-state debugging happens; `/misses` stays because the miss log exists only on device flash and mpremote cannot reach it once WiFi is up. A handler exception returns **500** rather than dropping the connection. Spotify handlers never set `done` — the boot setup window (below) governs the setup→runtime transition
 - `boot.py` — first-boot AP setup (WiFi), then normal-boot WiFi connect + hand off to main.py
-- `main.py` — 3-minute poll loop. Serves `ConfigServer` in `setup` mode for a bounded **setup window** (`_SETUP_GRACE_MS`, 5 min after power-on — the owner is physically present), then calls `lock_runtime()` so only read-only introspection is served for the rest of uptime. Spotify OAuth (via the PC helper's `POST /spotify/token`) and mock-host changes happen during this window; re-config = power-cycle and act within it. Also: WDT, gc, active WiFi reconnect, panic guard
+- `main.py` — 3-minute poll loop. Serves `ConfigServer` in `setup` mode for a bounded **setup window** (`_SETUP_GRACE_MS`, 5 min after power-on — the owner is physically present), then calls `lock_runtime()` so only `GET /misses` is served for the rest of uptime. Spotify OAuth (via the PC helper's `POST /spotify/token`) and mock-host changes happen during this window; re-config = power-cycle and act within it. Also: WDT, gc, active WiFi reconnect, panic guard
 
 The try/except convention: each module that needs a MicroPython-specific import wraps it in `try: import ujson / except ImportError: import json` (or equivalent). Pure modules have no such imports and run identically on both platforms.
 
@@ -171,7 +190,7 @@ Public API: `hue(theta_deg)`, `saturation_k()`, `brightness_floor()`, `brightnes
 
 **mDNS**: Device advertises as `musical-mood-ring.local`, providing a stable Spotify OAuth redirect URI (`http://musical-mood-ring.local/callback`) regardless of DHCP-assigned IP.
 
-**Config-server security model**: The HTTP config server runs in two modes. Mutating endpoints (`/wifi`, `/spotify/*`) are reachable only in `setup` mode — during first-boot AP setup and during a bounded **setup window** (`_SETUP_GRACE_MS`, 5 min) at the start of every normal boot, after which `main.py` calls `lock_runtime()` and only read-only introspection (`/misses`, #58's endpoints) is served for the rest of uptime. **Accepted risk**: that 5-minute window is *unauthenticated* and runs on the home LAN, so for 5 min after every power-on any LAN host can write config (WiFi creds, Spotify token). This is a deliberate trade-off — the owner is physically present at power-on, exposure is bounded, and the device targets a trusted home network. If the threat model tightens, the hardening path is a flashed shared-secret header on the mutating endpoints (not yet implemented). `SPOTIFY_MOCK_HOST` is flash-only (no HTTP write path) and honoured only for loopback/RFC1918 targets, so it can't be used to downgrade OAuth traffic to cleartext.
+**Config-server security model**: The HTTP config server runs in two modes. Mutating endpoints (`/wifi`, `/spotify/*`) are reachable only in `setup` mode — during first-boot AP setup and during a bounded **setup window** (`_SETUP_GRACE_MS`, 5 min) at the start of every normal boot, after which `main.py` calls `lock_runtime()` and only `GET /misses` is served for the rest of uptime. Engine introspection is deliberately **not** an HTTP concern — see the offline harness above. **Accepted risk**: that 5-minute window is *unauthenticated* and runs on the home LAN, so for 5 min after every power-on any LAN host can write config (WiFi creds, Spotify token). This is a deliberate trade-off — the owner is physically present at power-on, exposure is bounded, and the device targets a trusted home network. If the threat model tightens, the hardening path is a flashed shared-secret header on the mutating endpoints (not yet implemented). `SPOTIFY_MOCK_HOST` is flash-only (no HTTP write path) and honoured only for loopback/RFC1918 targets, so it can't be used to downgrade OAuth traffic to cleartext.
 
 **Deployment**: `mpremote` (not ampy) for flashing files to the ESP32. Use `build/reset.sh` to erase and reflash MicroPython itself. Use `build/deploy.sh` to copy firmware and bundles to an already-flashed board:
 

@@ -118,6 +118,18 @@ def test_snapshot_copies_track_ids_not_aliases():
     assert state.last_track_ids == ["a", "b"]
 
 
+# ── animator + error_mode (#58 /state) ──────────────────────────────────────
+#
+# main.py writes the loop's resolved animator and error_mode each iteration so
+# /state can report what the ring is actually doing (mood transition? idle
+# sparkle? WIFI_LOST overlay?). The animator is reported as a {class, done}
+# descriptor — config_server stays ignorant of animator internals.
+
+class _FakeAnimator:
+    def __init__(self, done=False):
+        self.done = done
+
+
 # ── No circular imports between runtime_state, mood_engine, config_server ───
 #
 # The whole point of RuntimeState is that ConfigServer can read engine state

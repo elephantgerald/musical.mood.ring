@@ -143,7 +143,11 @@ _HTML_403 = "HTTP/1.0 403 Forbidden\r\n\r\nConfiguration endpoints are disabled 
 # (method, path) tuples reachable while the device runs normally (mode="runtime").
 # Read-only only — anything that mutates config must be a setup-mode action so an
 # always-on LAN server can't be used to rewrite credentials or redirect traffic.
-# #58's introspection endpoints (/state, /pixels, /poll-log) join this set.
+# Engine introspection is NOT served here — dev/fake_board.py runs the real
+# poll loop in CPython against the mock, which is where mood-state debugging
+# happens. This stays limited to /misses: the miss log lives only on device
+# flash, and mpremote cannot break into the REPL once WiFi is up, so HTTP is
+# the only way to harvest it from a running board.
 _RUNTIME_ENDPOINTS = {
     ("GET", "/misses"),
 }
@@ -162,10 +166,9 @@ class ConfigServer:
     Pass _sock for testing (dependency injection); omit to use a real socket.
     """
 
-    def __init__(self, host="0.0.0.0", port=80, mode="setup", state=None, _sock=None):
+    def __init__(self, host="0.0.0.0", port=80, mode="setup", _sock=None):
         self.done   = False
         self._mode  = mode
-        self._state = state   # RuntimeState ref for introspection endpoints (#58)
         if _sock is not None:
             self._sock = _sock
         else:
@@ -188,7 +191,15 @@ class ConfigServer:
             raw = conn.recv(1024).decode("utf-8", "ignore")
             self._dispatch(conn, raw)
         except Exception:
-            pass
+            # Surface a 500 rather than dropping the connection silently: the
+            # introspection endpoints exist to debug a console-less device, so a
+            # snapshot failure must be observable, not a phantom network blip.
+            # Best-effort — if a partial response was already sent, or send()
+            # itself is what failed, this no-ops.
+            try:
+                conn.send(b"HTTP/1.0 500 Internal Server Error\r\n\r\n")
+            except Exception:
+                pass
         finally:
             try:
                 conn.close()
@@ -334,9 +345,8 @@ class ConfigServer:
         config.save({"spotify_refresh_token": token})
         config.reload()
         # No done=True: this runs inside main.py's live loop during the boot
-        # setup window. main.py picks up the token on its next poll and keeps
-        # serving read-only introspection. The grace timer governs the
-        # setup→runtime transition, not this handler.
+        # setup window. main.py picks up the token on its next poll. The grace
+        # timer governs the setup→runtime transition, not this handler.
 
     def _handle_misses(self, conn):
         """Return the miss log as plain text (one track ID per line)."""

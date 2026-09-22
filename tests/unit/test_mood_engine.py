@@ -3,8 +3,16 @@ import json
 import pytest
 import miss_log
 from conftest import build_bundle
+from clock       import FakeClock
 from mmar        import MMARBundle
-from mood_engine import MoodEngine, _POLLS_1H, _POLLS_4H
+from mood_engine import MoodEngine, _MS_1H, _MS_4H
+
+# Tests express durations as poll counts at the nominal 3-min cadence; the engine
+# gates on wall-clock time, which a FakeClock advances deterministically. These
+# derived counts keep the existing loop-based tests reading naturally.
+_NOMINAL_MS = 3 * 60 * 1000
+_POLLS_1H   = _MS_1H // _NOMINAL_MS   # 20 nominal polls == 1 hour
+_POLLS_4H   = _MS_4H // _NOMINAL_MS   # 80 nominal polls == 4 hours
 
 
 @pytest.fixture(autouse=True)
@@ -15,21 +23,35 @@ def _redirect_miss_log(tmp_path, monkeypatch):
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
+def _make(bundle, artist_bundle=None):
+    """MoodEngine on a FakeClock, exposed as engine._test_clock for _poll()."""
+    clock  = FakeClock()
+    engine = MoodEngine(bundle, artist_bundle, clock=clock)
+    engine._test_clock = clock
+    return engine
+
+
 def _engine(*entries):
     """Build a MoodEngine with a track bundle only. (track_id, v, e) entries."""
-    return MoodEngine(MMARBundle(build_bundle(*entries)))
+    return _make(MMARBundle(build_bundle(*entries)))
 
 
 def _engine_with_artists(track_entries, artist_entries):
     """Build a MoodEngine with both track and artist bundles."""
     t = MMARBundle(build_bundle(*track_entries))
     a = MMARBundle(build_bundle(*artist_entries))
-    return MoodEngine(t, a)
+    return _make(t, a)
 
 
 def _poll(engine, *track_pairs):
-    """Call engine.update with a list of (track_id, artist_id) tuples."""
-    return engine.update(list(track_pairs))
+    """Advance one nominal poll interval, then call engine.update with now_ms.
+
+    Advancing *before* the update means that after a loop of N polls the clock
+    reads the last update's instant — so a follow-up pixel_sources() / snapshot()
+    (which read the clock when given no now_ms) see the same tier the last poll did.
+    """
+    engine._test_clock.advance(_NOMINAL_MS)
+    return engine.update(list(track_pairs), engine._test_clock.now_ms())
 
 
 def _p(track_id, artist_id="a_dummy"):
@@ -299,7 +321,7 @@ def test_snapshot_never_polled():
 
 def test_snapshot_single_track_hit():
     bundle = MMARBundle(build_bundle(("t1", 0.15, 0.85)))
-    engine = MoodEngine(bundle)
+    engine = _make(bundle)
     expected_ve = list(bundle.lookup("t1"))   # quantized through u8 round-trip
 
     _poll(engine, _p("t1"))
@@ -325,7 +347,7 @@ def test_snapshot_multiple_track_hits_accumulate():
 
 def test_snapshot_all_misses_decays_confidence_but_preserves_now_ve():
     bundle = MMARBundle(build_bundle(("t1", 0.15, 0.85)))
-    engine = MoodEngine(bundle)
+    engine = _make(bundle)
     expected_ve = list(bundle.lookup("t1"))
 
     _poll(engine, _p("t1"))          # establish now_ve and full confidence
@@ -370,7 +392,7 @@ def test_last_poll_outcomes_empty_before_first_poll():
 
 def test_last_poll_outcomes_track_hit_source():
     bundle = MMARBundle(build_bundle(("t1", 0.15, 0.85)))
-    engine = MoodEngine(bundle)
+    engine = _make(bundle)
     v, e   = bundle.lookup("t1")
 
     _poll(engine, _p("t1", "artist_x"))
@@ -382,7 +404,7 @@ def test_last_poll_outcomes_artist_hit_source():
     artist_entries = [("artist1", 0.2, 0.8)]
     t_bundle = MMARBundle(build_bundle(*track_entries))
     a_bundle = MMARBundle(build_bundle(*artist_entries))
-    engine   = MoodEngine(t_bundle, a_bundle)
+    engine   = _make(t_bundle, a_bundle)
     v, e     = a_bundle.lookup("artist1")
 
     _poll(engine, ("t_miss", "artist1"))
@@ -400,7 +422,7 @@ def test_last_poll_outcomes_mixed_preserves_order():
     artist_entries = [("a_hit", 0.4, 0.6)]
     t_bundle = MMARBundle(build_bundle(*track_entries))
     a_bundle = MMARBundle(build_bundle(*artist_entries))
-    engine   = MoodEngine(t_bundle, a_bundle)
+    engine   = _make(t_bundle, a_bundle)
 
     engine.update([
         ("t_hit",  "a_other"),
@@ -433,3 +455,75 @@ def test_reset_clears_last_poll_outcomes():
     assert engine.last_poll_outcomes() != []
     engine.reset()
     assert engine.last_poll_outcomes() == []
+
+
+# ── pixel_sources() — per-pixel (v, e) feeding the colour for #58's /pixels ──
+#
+# Mirrors _pixel_outputs()'s tier logic so a reader can see which (v, e) drove
+# each pixel: pixel 0 = now, pixel 1 = 1h EWMA once ≥1h of data, pixel 2 = 4h
+# EWMA once ≥4h. Returns lists (JSON-friendly) or None per pixel when idle.
+
+def test_pixel_sources_idle_all_none():
+    engine = _engine(("t1", 0.5, 0.5))
+    assert engine.pixel_sources() == [None, None, None]
+
+
+def test_pixel_sources_idle_after_only_misses():
+    engine = _engine(("t1", 0.5, 0.5))
+    _poll(engine, _p("miss"))
+    assert engine.pixel_sources() == [None, None, None]
+
+
+def test_pixel_sources_under_1h_all_now():
+    bundle = MMARBundle(build_bundle(("t1", 0.15, 0.85)))
+    engine = _make(bundle)
+    now    = list(bundle.lookup("t1"))
+    _poll(engine, _p("t1"))
+    assert engine.pixel_sources() == [now, now, now]
+
+
+def test_pixel_sources_at_exactly_1h_boundary():
+    """Just under 1h elapsed is still the <1h tier (all now) — guards a </<= flip."""
+    bundle = MMARBundle(build_bundle(("t1", 0.15, 0.85)))
+    engine = _make(bundle)
+    for _ in range(_POLLS_1H):
+        _poll(engine, _p("t1"))
+    now = engine.snapshot()["now_ve"]
+    assert engine.pixel_sources() == [now, now, now]
+
+
+def test_pixel_sources_at_exactly_4h_boundary():
+    """Just under 4h elapsed is still the 1h tier (no 4h yet) — guards a </<= flip."""
+    bundle = MMARBundle(build_bundle(("t1", 0.15, 0.85)))
+    engine = _make(bundle)
+    for _ in range(_POLLS_4H):
+        _poll(engine, _p("t1"))
+    snap = engine.snapshot()
+    assert engine.pixel_sources() == [snap["now_ve"], snap["ewma_1h"], snap["ewma_1h"]]
+
+
+def test_pixel_sources_between_1h_and_4h():
+    bundle = MMARBundle(build_bundle(("t1", 0.15, 0.85)))
+    engine = _make(bundle)
+    for _ in range(_POLLS_1H + 1):
+        _poll(engine, _p("t1"))
+    snap = engine.snapshot()
+    # pixel 0 = now_ve, pixels 1 & 2 = 1h EWMA (no 4h yet)
+    assert engine.pixel_sources() == [snap["now_ve"], snap["ewma_1h"], snap["ewma_1h"]]
+
+
+def test_pixel_sources_over_4h_uses_all_three():
+    bundle = MMARBundle(build_bundle(("t1", 0.15, 0.85)))
+    engine = _make(bundle)
+    for _ in range(_POLLS_4H + 1):
+        _poll(engine, _p("t1"))
+    snap = engine.snapshot()
+    assert engine.pixel_sources() == [snap["now_ve"], snap["ewma_1h"], snap["ewma_4h"]]
+
+
+def test_pixel_sources_json_round_trips():
+    engine = _engine(("t1", 0.3, 0.7))
+    for _ in range(_POLLS_4H + 1):
+        _poll(engine, _p("t1"))
+    src = engine.pixel_sources()
+    assert json.loads(json.dumps(src)) == src

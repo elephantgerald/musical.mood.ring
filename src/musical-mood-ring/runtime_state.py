@@ -2,17 +2,16 @@
 #
 # Shared runtime state for musical-mood-ring.
 #
-# main.py owns and mutates a RuntimeState. ConfigServer receives a reference
-# and reads from it to serve the introspection endpoints (#58). The point of
-# this module: config_server and mood_engine never import each other —
-# runtime_state imports OUTCOME_FIELDS from mood_engine (one direction only,
-# no cycle), and config_server only imports runtime_state. That keeps the
-# engine's hot path free of HTTP/server code and lets ConfigServer remain
-# ignorant of MoodEngine's internals.
+# main.py owns and mutates a RuntimeState; dev/fake_board.py builds one to run
+# the same poll cycle in CPython. It carries the last-poll view and the rolling
+# poll log (#57) so a reader can see what the engine did without reaching into
+# MoodEngine's internals. runtime_state imports OUTCOME_FIELDS from mood_engine
+# (one direction only, no cycle), keeping the engine's hot path free of any
+# reporting concern.
 #
-# Convention: ConfigServer treats every field as read-only. Python doesn't
-# enforce this without a type checker — discipline lives in the docstring
-# and in code review.
+# Convention: readers treat every field as read-only. Python doesn't enforce
+# this without a type checker — discipline lives in the docstring and in code
+# review.
 #
 # Pure Python — no hardware dependencies. Safe to import in CPython tests.
 
@@ -22,9 +21,7 @@ from mood_engine import OUTCOME_FIELDS
 # Depth of the rolling poll log (#57). recently_played() returns ≤10 tracks, so
 # a record is ~350 B typical, ~580 B worst case (10 IDs + their (v,e) pairs).
 # 20 records covers the last hour at the default 3-minute cadence. The whole log
-# is a handful of KB of small dicts in RAM — well within the ESP32 budget; only
-# the transient JSON of a full /poll-log response approaches ~12 KB, which the
-# board serves without trouble.
+# is a handful of KB of small dicts in RAM — well within the ESP32 budget.
 _POLL_LOG_SIZE = 20
 
 
@@ -92,8 +89,13 @@ class RuntimeState:
 
         The record is built fully-owned and json.dumps()-able: input sequences
         are copied (a caller mutating them later can't corrupt a stored record)
-        and tuples are flattened to lists. Per the M10 learning, colors_after is
-        the engine's mood output, not the animator's last_colors overlay.
+        and tuples are flattened to lists. colors_after is the engine's mood
+        output (last_mood_colors), not the animator's last_colors overlay.
+
+        Note: this `error` vocabulary (None | "network" | "auth_fail") is a
+        poll-outcome label, deliberately distinct from main.py's animator-overlay
+        `error_mode` (None | "wifi_lost" | "auth_fail") — not the same enum, and
+        intentionally not unified.
 
             time_ms          — ticks_ms when the poll ran
             track_ids        — [str, ...] polled (empty on auth/network failure)
@@ -125,8 +127,8 @@ class RuntimeState:
 
         Each record is rebuilt with fresh nested lists so a reader can't mutate
         the live log — the same deep-copy-to-JSON-ready discipline snapshot()
-        applies to last_colors. Kept separate from snapshot() so /state stays
-        lean and #58's /poll-log endpoint serves this buffer on its own.
+        applies to last_colors. Kept separate from snapshot() so a caller that
+        only wants current state doesn't pay to copy the whole buffer.
         """
         return [
             {

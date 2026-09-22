@@ -30,17 +30,6 @@ def test_hw_flag_false_in_cpython():
     assert config_server._HW is False
 
 
-def test_state_defaults_to_none():
-    server = _make_server()
-    assert server._state is None
-
-
-def test_state_kwarg_is_stored():
-    sentinel = object()
-    server   = ConfigServer(state=sentinel, _sock=_mock_sock())
-    assert server._state is sentinel
-
-
 # ── stop() ──────────────────────────────────────────────────────────────────
 
 def test_stop_sets_done():
@@ -533,3 +522,24 @@ def test_get_misses_empty_log_returns_empty_body():
     raw  = conn.send.call_args[0][0].decode()
     body = raw.split("\r\n\r\n", 1)[-1]
     assert body == ""
+
+
+# ── Handler failures surface ────────────────────────────────────────────────
+
+def test_step_handler_exception_sends_500():
+    """A handler exception surfaces a 500, not a silently dropped connection.
+
+    The device has no console; a request that vanishes is indistinguishable from
+    a network blip, so failures must be visible to the caller.
+    """
+    conn = MagicMock()
+    conn.recv.return_value = b"GET /misses HTTP/1.1\r\n\r\n"
+    sock = MagicMock()
+    sock.accept.return_value = (conn, ("10.0.0.5", 5000))
+
+    server = ConfigServer(mode="runtime", _sock=sock)
+    with patch.object(config_server.miss_log, "all", side_effect=RuntimeError("boom")):
+        server.step()
+
+    sent = b"".join(c.args[0] for c in conn.send.call_args_list)
+    assert b"500" in sent
